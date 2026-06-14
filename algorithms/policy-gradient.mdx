@@ -1,5 +1,5 @@
 ---
-title: "REINFORCE: Policy Gradient for Discrete Actions"
+title: "REINFORCE: Monte Carlo Policy Gradient for CartPole"
 sidebarTitle: "Policy Gradient"
 description: "Implement the REINFORCE algorithm — a Monte Carlo policy gradient method — to train a neural network policy directly on CartPole using PyTorch."
 ---
@@ -75,7 +75,7 @@ model(torch.randn(2, 4))
 
 ## Action Selection
 
-Unlike epsilon-greedy, the policy is sampled stochastically from the probability distribution output by the network.
+Unlike epsilon-greedy, the policy is sampled stochastically from the probability distribution output by the network. `random.choices` weights the selection by the action probabilities.
 
 ```python
 import random
@@ -86,7 +86,7 @@ def get_action(state):
     # [1, 4] → [1, 2]
     prob = model(state)
 
-    # Sample one action according to its probability
+    # Sample one action weighted by its probability
     action = random.choices(range(2), weights=prob[0].tolist(), k=1)[0]
 
     return action
@@ -138,7 +138,7 @@ def train():
         reward_sum = 0
 
         for i in reversed(range(len(states))):
-            # G_t = r_t + γ · G_{t+1}
+            # G_t = r_t + γ · G_{t+1}  (γ = 0.98)
             reward_sum *= 0.98
             reward_sum += rewards[i]
 
@@ -159,8 +159,8 @@ def train():
 
         optimizer.step()
 
-        if epoch % 50 == 0:
-            print(epoch, sum([test(play=False) for _ in range(20)]) / 20)
+        if epoch % 100 == 0:
+            print(epoch, sum([test(play=False) for _ in range(10)]) / 10)
 
 train()
 ```
@@ -187,7 +187,7 @@ loss.backward(retain_graph=True)
 ```
 
 <Tip>
-The high variance of REINFORCE is its main weakness. Actor-Critic methods (see the next page) replace `G_t` with an **advantage estimate** `A_t = G_t - V(s_t)` to reduce variance at the cost of introducing a learned baseline.
+The high variance of REINFORCE is its main weakness. Actor-Critic methods (see the next page) replace `G_t` with a **TD error** `δ_t = r_t + γV(s_{t+1}) - V(s_t)` to reduce variance while keeping per-step updates.
 </Tip>
 
 ## Comparison with DQN
@@ -195,7 +195,7 @@ The high variance of REINFORCE is its main weakness. Actor-Critic methods (see t
 <Tabs>
   <Tab title="Policy Gradient (REINFORCE)">
     - **On-policy**: uses data collected by the current policy only.
-    - **Stochastic policy**: outputs a probability distribution; action is sampled.
+    - **Stochastic policy**: outputs a probability distribution; action is sampled via `random.choices`.
     - **Monte Carlo returns**: requires a full episode before any update.
     - **Directly optimises** the policy objective.
     - **High variance** due to Monte Carlo estimation of the return.

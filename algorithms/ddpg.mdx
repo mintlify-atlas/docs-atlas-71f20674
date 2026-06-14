@@ -1,7 +1,7 @@
 ---
-title: "DDPG: Deep Deterministic Policy Gradient for Continuous Actions"
+title: "DDPG: Continuous Action Deep Deterministic Policy Gradient"
 sidebarTitle: "DDPG"
-description: "Implement DDPG — an off-policy actor-critic algorithm for continuous action spaces — using target networks, experience replay, and Ornstein-Uhlenbeck noise."
+description: "Implement DDPG on Pendulum-v1 — an off-policy actor-critic method for continuous actions using target networks, experience replay, and Gaussian noise."
 ---
 
 DQN works beautifully for environments with a small, discrete action space, but it cannot handle **continuous actions** such as the torque applied to a pendulum. The naive extension — discretising the action space — grows exponentially with the number of action dimensions. **Deep Deterministic Policy Gradient (DDPG)** solves this by combining ideas from DQN (experience replay, target networks) with a **deterministic actor** that directly maps states to continuous actions. The critic evaluates `Q(s, a)` for the actor's chosen action, and the actor is updated by ascending the Q gradient.

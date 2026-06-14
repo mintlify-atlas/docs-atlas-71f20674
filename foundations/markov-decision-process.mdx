@@ -154,10 +154,12 @@ The notebooks demonstrate two approaches to solving this system.
 
 ### Iterative (Gradient Descent) Solution
 
+The second notebook redefines the MDP as a 6-state chain with a per-state reward vector `R`:
+
 ```python
 # 梯度下降法计算贝尔曼矩阵 — Iterative Bellman solution
-# Uses a different (6-state) MDP with per-state reward vector R
-P6 = np.array([
+# 6-state MDP with per-state reward vector
+P = np.array([
     [0.9, 0.1, 0.0, 0.0, 0.0, 0.0],
     [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
     [0.0, 0.0, 0.0, 0.6, 0.0, 0.4],
@@ -166,10 +168,10 @@ P6 = np.array([
     [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
 ])
 
-R6 = np.array([-1, -2, -2, 10, 1, 0])
+R = np.array([-1, -2, -2, 10, 1, 0])
 
 
-def get_bellman_iterative():
+def get_bellman():
     # 初始化values — Initialise values
     value = np.ones([6])
 
@@ -177,12 +179,12 @@ def get_bellman_iterative():
         for i in range(6):
             # 每一行的概率 × 当前value，× gamma，+ 奖励
             # V(s) ← R(s) + γ Σ P(s'|s) V(s')
-            value[i] = R6[i] + 0.5 * P6[i].dot(value)
+            value[i] = R[i] + 0.5 * P[i].dot(value)
 
     return value
 
 
-get_bellman_iterative()
+get_bellman()
 # array([-2.02, -2.21,  1.16, 10.54,  3.59,  6.22e-61])
 ```
 
@@ -191,10 +193,10 @@ get_bellman_iterative()
 ```python
 # 解析解贝尔曼方程矩阵 — Analytical Bellman solution
 def get_bellman():
-    mat = np.eye(*P6.shape)
-    mat -= 0.5 * P6          # (I - γP)
+    mat = np.eye(*P.shape)
+    mat -= 0.5 * P           # (I - γP)
     mat = np.linalg.inv(mat) # (I - γP)^{-1}
-    return mat.dot(R6)       # V = (I - γP)^{-1} R
+    return mat.dot(R)        # V = (I - γP)^{-1} R
 
 
 get_bellman()

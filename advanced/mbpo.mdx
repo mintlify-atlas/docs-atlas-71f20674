@@ -1,7 +1,7 @@
 ---
-title: "MBPO: Model-Based Policy Optimization with Synthetic Rollouts"
+title: "MBPO: Synthetic Rollouts for Sample-Efficient RL"
 sidebarTitle: "MBPO"
-description: "Implement MBPO — combine a learned dynamics model with SAC by generating short synthetic rollouts from the model to augment the real replay buffer."
+description: "Combine a learned ensemble model with SAC on Pendulum — generate 1-step synthetic rollouts to boost sample efficiency while keeping rollout errors small."
 ---
 
 Model-Based Policy Optimization (MBPO) is a hybrid algorithm that combines the **sample efficiency** of model-based RL with the **asymptotic performance** of a model-free policy optimizer. The core idea is simple: learn a dynamics model from real environment interactions, use it to generate synthetic short rollouts, and add those synthetic transitions to the replay buffer used to train a SAC policy. This way, the policy receives many more gradient updates per unit of real environment interaction, dramatically improving sample efficiency.

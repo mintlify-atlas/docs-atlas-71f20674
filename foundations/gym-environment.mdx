@@ -67,7 +67,7 @@ import time
 env = gym.make('LunarLander-v2', render_mode='rgb_array')
 
 # 初始化游戏 — Initialize the game
-state = env.reset()
+state, info = env.reset()
 
 # 随机玩N个动作 — Play N random actions
 for i in range(300):

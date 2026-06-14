@@ -1,7 +1,7 @@
 ---
-title: "Model Predictive Control: Planning with a Learned Dynamics Model"
+title: "Model Predictive Control: Planning with a Learned Model"
 sidebarTitle: "MPC"
-description: "Implement Model Predictive Control in RL — learn a dynamics model from data, then use it to plan optimal action sequences at each timestep via random shooting."
+description: "Plan optimal action sequences on Pendulum with a learned ensemble dynamics model and the Cross-Entropy Method, re-planning at every real timestep."
 ---
 
 Model Predictive Control (MPC) is a planning-based approach to reinforcement learning. Rather than learning a policy directly, MPC maintains a **learned dynamics model** of the environment and, at every time step, uses that model to search for the best sequence of actions over a short planning horizon. Only the first action in the best sequence is executed; then the model is re-queried from the new state. This "receding horizon" strategy allows the agent to continuously correct for model error.

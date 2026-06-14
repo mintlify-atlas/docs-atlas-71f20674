@@ -1,14 +1,14 @@
 ---
-title: "Deep Q-Networks: DQN, Double DQN, and Dueling DQN"
+title: "Deep Q-Networks: DQN, Double DQN, and Dueling DQNs"
 sidebarTitle: "DQN"
-description: "Implement DQN with experience replay and target networks, then extend it to Double DQN and Dueling DQN using PyTorch and CartPole/Pendulum environments."
+description: "Implement DQN with experience replay and target networks in PyTorch on CartPole, then extend to Double DQN and Dueling DQN on Pendulum."
 ---
 
-Deep Q-Networks (DQN) bridge the gap between classical Q-learning and modern deep learning by using a neural network to approximate the action-value function Q(s, a). Rather than storing Q-values in a table, the network generalises across the continuous state space. Two critical inventions make training stable: an **experience replay buffer** that breaks temporal correlations in the data, and a periodically-frozen **target network** that provides stable regression targets. This page walks through the single-model baseline, the dual-model CartPole and Pendulum variants, and then shows how Double DQN and Dueling DQN improve on the original design.
+Deep Q-Networks (DQN) bridge the gap between classical Q-learning and modern deep learning by using a neural network to approximate the action-value function Q(s, a). Rather than storing Q-values in a table, the network generalises across the continuous state space. Two critical inventions make training stable: an **experience replay buffer** that breaks temporal correlations in the data, and a periodically-frozen **target network** that provides stable regression targets. This page walks through the single-model CartPole baseline, then shows how Double DQN and Dueling DQN improve on the original design using the Pendulum environment.
 
 ## Environment Setup
 
-All DQN notebooks wrap the gym environment in a `MyWrapper` class that normalises the `step` return signature and enforces an episode length limit.
+The single-model DQN notebook wraps CartPole in a `MyWrapper` class that normalises the `step` return signature and enforces a 200-step episode limit.
 
 ```python
 import gym
@@ -48,7 +48,7 @@ CartPole-v1 has a 4-dimensional state (position, velocity, angle, angular veloci
     A neural network maps state → Q-values for every action. The agent picks the action with the highest Q-value (greedy), or explores randomly with probability ε (epsilon-greedy).
   </Step>
   <Step title="Experience Replay">
-    Transitions `(s, a, r, s', done)` are stored in a replay buffer. At each training step a random mini-batch is drawn from this buffer, breaking harmful temporal correlations.
+    Transitions `(s, a, r, s', done)` are stored in a Python list called `datas`. At each training step a random mini-batch is drawn from this buffer, breaking harmful temporal correlations.
   </Step>
   <Step title="Target Network">
     A second network with frozen weights provides the TD targets. Its weights are periodically hard-copied from the online network, preventing the "chasing a moving target" instability.
@@ -96,7 +96,7 @@ The exploration rate here is a fixed 1 %. In practice you would anneal ε from a
 ### Experience Replay Buffer
 
 ```python
-# Replay buffer
+# Replay buffer — a plain Python list
 datas = []
 
 def update_data():
@@ -112,9 +112,14 @@ def update_data():
             datas.append((state, action, reward, next_state, over))
             state = next_state
 
+    update_count = len(datas) - old_count
+    drop_count = max(len(datas) - 10000, 0)
+
     # Evict oldest samples beyond the 10 000 cap
     while len(datas) > 10000:
         datas.pop(0)
+
+    return update_count, drop_count
 ```
 
 ### Sampling a Mini-Batch
@@ -160,8 +165,6 @@ def get_target(reward, next_state, over):
 ### Training Loop
 
 ```python
-from IPython import display
-
 def train():
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
@@ -189,84 +192,102 @@ def train():
 train()
 ```
 
-## Dual-Model DQN (Target Network)
-
-The dual-model variant adds a **target network** (`next_model`) whose weights are periodically synchronised from the online network. This decouples the target computation from the learning weights and significantly stabilises training.
-
-```python
-import torch
-
-# Online network
-model = torch.nn.Sequential(
-    torch.nn.Linear(4, 128),
-    torch.nn.ReLU(),
-    torch.nn.Linear(128, 2),
-)
-
-# Target network – initialised as a copy of model
-next_model = torch.nn.Sequential(
-    torch.nn.Linear(4, 128),
-    torch.nn.ReLU(),
-    torch.nn.Linear(128, 2),
-)
-next_model.load_state_dict(model.state_dict())
-```
-
-The only change to `get_target` is that it now uses `next_model` instead of `model`:
-
-```python
-def get_target(reward, next_state, over):
-    with torch.no_grad():
-        target = next_model(next_state)     # frozen weights
-
-    target = target.max(dim=1)[0]
-    target = target.reshape(-1, 1)
-
-    target *= 0.98
-    target *= (1 - over)
-    target += reward
-    return target
-```
-
-During training the target network is refreshed every 10 inner steps:
-
-```python
-# Inside the inner training loop
-if (i + 1) % 10 == 0:
-    next_model.load_state_dict(model.state_dict())
-```
-
 ## Double DQN
+
+The Double DQN and Dueling DQN variants switch to the **Pendulum-v1** environment. Pendulum has a 3-dimensional state and a continuous torque action. To use DQN (which requires a discrete action space), the continuous action range `[-2, 2]` is discretised into **11 bins**.
+
+```python
+import gym
+
+class MyWrapper(gym.Wrapper):
+    def __init__(self):
+        env = gym.make('Pendulum-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
 
 Vanilla DQN tends to **overestimate** Q-values because the same network both selects and evaluates actions. Double DQN decouples these two decisions:
 
 - **Action selection** → online network (`model`)
 - **Action evaluation** → target network (`next_model`)
 
+Both networks have input dimension 3 (Pendulum state) and output 11 (discretised actions).
+
+```python
+import torch
+
+model = torch.nn.Sequential(
+    torch.nn.Linear(3, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 11),
+)
+
+next_model = torch.nn.Sequential(
+    torch.nn.Linear(3, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 11),
+)
+next_model.load_state_dict(model.state_dict())
+```
+
+Actions are selected by the online network, then mapped back to a continuous value for the environment:
+
+```python
+import random
+
+def get_action(state):
+    state = torch.FloatTensor(state).reshape(1, 3)
+    action = model(state).argmax().item()
+
+    if random.random() < 0.01:
+        action = random.choice(range(11))
+
+    # Map discrete bin index to continuous action in [-2, 2]
+    action_continuous = action / 10 * 4 - 2
+    return action, action_continuous
+```
+
+The key difference from standard DQN is in `get_target`: the online network selects the best next action, but the target network evaluates its value.
+
 ```python
 def get_target(reward, next_state, over):
     with torch.no_grad():
-        target = next_model(next_state)     # [b, 3] → [b, 11]
+        target = next_model(next_state)     # target net: [b, 11]
 
-    # Standard DQN (commented out):
-    # target = target.max(dim=1)[0]
-
-    # Double DQN: use online net to select the best action
+    # Double DQN: online net selects the best action index
     with torch.no_grad():
-        model_target = model(next_state)    # [b, 3] → [b, 11]
+        model_target = model(next_state)    # online net: [b, 11]
 
-    # Index into target-net values with actions chosen by online net
-    best_actions = model_target.argmax(dim=1)
-    target = target[range(len(target)), best_actions]
+    best_actions = model_target.max(dim=1)[1].reshape(-1, 1)
 
-    target = target.reshape(-1, 1)
+    # Target net evaluates the value at that action
+    target = target.gather(dim=1, index=best_actions)
+
     target *= 0.98
     target *= (1 - over)
     target += reward
     return target
 ```
 
-The target network is synchronised less frequently (every 50 steps) to give it time to stabilise:
+The target network is hard-copied every 50 inner steps:
 
 ```python
 if (i + 1) % 50 == 0:
@@ -276,6 +297,8 @@ if (i + 1) % 50 == 0:
 ## Dueling DQN
 
 Dueling DQN factorises the Q-value into a **state-value stream V(s)** and an **advantage stream A(s, a)** via a custom network architecture. This helps the network learn the baseline value of a state independently of which action is taken.
+
+The `VAnet` class below also operates on the Pendulum state (dim 3, 11 actions):
 
 ```python
 import torch
@@ -297,11 +320,12 @@ class VAnet(torch.nn.Module):
         A = self.fc_A(self.fc(x))              # [b, 11]
         V = self.fc_V(self.fc(x))              # [b, 1]
 
+        # Centre advantages so V and A are identifiable
         A_mean = A.mean(dim=1).reshape(-1, 1)  # [b, 1]
-        A -= A_mean                            # centre advantages
+        A -= A_mean
 
         # Q = V + (A - mean(A))
-        return V + A
+        return A + V
 ```
 
 ```python
@@ -317,13 +341,12 @@ Subtracting the mean advantage (`A -= A_mean`) ensures identifiability: without 
 
 ## Comparison
 
-| Variant | Key Difference | Benefit |
-|---------|---------------|---------|
-| DQN (single model) | One network for selection and evaluation | Simple baseline |
-| DQN (dual model) | Frozen target network | Stable TD targets |
-| Double DQN | Online net selects, target net evaluates | Reduces overestimation |
-| Dueling DQN | Separate V and A streams | Better state-value estimation |
+| Variant | Environment | Key Difference | Benefit |
+|---------|-------------|---------------|---------|
+| DQN (single model) | CartPole-v1 | One network for selection and evaluation | Simple baseline |
+| Double DQN | Pendulum-v1 (discretised) | Online net selects, target net evaluates | Reduces overestimation |
+| Dueling DQN | Pendulum-v1 (discretised) | Separate V and A streams | Better state-value estimation |
 
 <Warning>
-All examples here use a **hard copy** of weights into the target network. Production implementations often prefer a **soft update** (`θ_target ← τ θ + (1-τ) θ_target` with small τ) as used in DDPG and SAC.
+All examples here use a **hard copy** of weights into the target network (`next_model.load_state_dict(model.state_dict())`). Production implementations often prefer a **soft update** (`θ_target ← τ θ + (1-τ) θ_target` with small τ) as used in DDPG and SAC.
 </Warning>

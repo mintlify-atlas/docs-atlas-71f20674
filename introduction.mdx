@@ -1,7 +1,7 @@
 ---
 title: "Simple Reinforcement Learning: Course Introduction"
 sidebarTitle: "Introduction"
-description: "An overview of the Simple Reinforcement Learning notebook series — 18 algorithms from multi-armed bandits to multi-agent systems, all built from scratch."
+description: "An overview of the Simple Reinforcement Learning notebook series — 18 topics from multi-armed bandits to multi-agent systems, all built from scratch."
 ---
 
 Reinforcement learning (RL) is the branch of machine learning where an agent learns to make decisions by interacting with an environment, collecting rewards, and gradually improving its strategy over time. Unlike supervised learning, there are no labelled examples — the agent discovers what works through trial and error. This makes RL the foundation behind breakthroughs such as AlphaGo, robotic control, and large language model fine-tuning. The **Simple Reinforcement Learning** series was created to make these ideas accessible: every concept is implemented from scratch in a self-contained Jupyter notebook, so you can read the theory, run the code, and watch the agent improve — all in one place.
@@ -24,20 +24,20 @@ The series is organised as 18 numbered topics that build on each other progressi
 
 ## Course Structure
 
-The 18 notebooks are stored in numbered folders inside the repository. The table below groups them into four natural phases of the curriculum.
+The topics are stored in numbered folders inside the repository. The table below groups them into four natural phases of the curriculum.
 
 <CardGroup cols={2}>
   <Card title="Foundations" icon="seedling">
-    **Notebooks 1–4** — Multi-armed bandits, Markov Decision Processes, dynamic programming, and Monte Carlo methods. You learn how value functions and policies are defined before any neural network is involved.
+    **Topics 1–4** — Multi-armed bandits (folder 1), Markov Decision Processes (folder 2), dynamic programming (folder 3), and temporal-difference learning (folder 4). You learn how value functions and policies are defined before any neural network is involved.
   </Card>
   <Card title="Classic Control" icon="sliders">
-    **Notebooks 5–9** — Temporal-difference learning, Q-learning, SARSA, and the first deep networks: DQN and its Double / Dueling / Priority-Replay variants. CartPole-v1 is solved for the first time here.
+    **Topics 5–8** — DynaQ model-based planning (folder 5), Deep Q-Networks including Double DQN and Dueling DQN (folder 6), REINFORCE policy gradient (folder 7), and Actor-Critic (folder 8). CartPole-v1 is solved for the first time here.
   </Card>
   <Card title="Policy Gradient Methods" icon="chart-line">
-    **Notebooks 10–14** — REINFORCE, Actor-Critic (A2C), Proximal Policy Optimization (PPO), and Soft Actor-Critic (SAC). Pendulum-v1 is introduced as the continuous-action testbed.
+    **Topics 10–14** — Proximal Policy Optimization (folder 10), DDPG (folder 11), Soft Actor-Critic (folder 12), imitation learning (folder 13), and offline learning (folder 14). Pendulum-v1 is introduced as the continuous-action testbed.
   </Card>
   <Card title="Advanced Topics" icon="network-wired">
-    **Notebooks 15–18** — Distributional RL, model-based planning, imitation learning, and multi-agent systems. These chapters connect the fundamentals to modern research directions.
+    **Topics 15–18** — Model Predictive Control (folder 15), MBPO (folder 16), goal-oriented RL (folder 17), and multi-agent systems (folder 18). These chapters connect the fundamentals to modern research directions.
   </Card>
 </CardGroup>
 

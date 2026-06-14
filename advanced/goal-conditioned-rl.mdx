@@ -1,7 +1,7 @@
 ---
-title: "Goal-Conditioned RL: Hindsight Experience Replay"
+title: "Goal-Conditioned RL with Hindsight Experience Replay"
 sidebarTitle: "Goal-Conditioned RL"
-description: "Implement goal-conditioned reinforcement learning with Hindsight Experience Replay (HER) — train agents to reach specified goals by relabeling failed trajectories."
+description: "Solve sparse-reward 2D navigation with DDPG and HER by relabeling 80% of failed trajectories, turning each episode into useful goal-reaching experience."
 ---
 
 Goal-conditioned reinforcement learning trains an agent to reach a variety of specified goals rather than maximizing a single fixed reward. The policy receives both the current state and the goal as input: `π(a | s, g)`. This generalization makes the agent far more flexible — once trained, it can be directed toward any reachable goal in the environment.

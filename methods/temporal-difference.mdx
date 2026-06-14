@@ -1,7 +1,7 @@
 ---
 title: "Temporal-Difference Learning: Sarsa and Q-Learning"
 sidebarTitle: "TD Learning"
-description: "Implement Sarsa, N-step Sarsa, and Q-Learning — the core temporal-difference algorithms that learn directly from environment interaction without a model."
+description: "Implement Sarsa, N-step Sarsa, and Q-Learning on a cliff-walking grid — the core temporal-difference algorithms that bootstrap from experience."
 ---
 
 Temporal-difference (TD) learning sits at the heart of modern reinforcement learning. Unlike Monte Carlo methods, which wait until the end of an episode to update values, TD methods update estimates after every single step by bootstrapping from the current estimate of the next state's value. Unlike dynamic programming, TD methods require no model of the environment — they learn purely from raw experience. This page walks through three progressively powerful TD algorithms — Sarsa, N-step Sarsa, and Q-Learning — all demonstrated on a 4×12 cliff-walking grid where the agent must reach a goal while avoiding traps along the bottom edge.

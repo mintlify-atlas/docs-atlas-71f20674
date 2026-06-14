@@ -1,30 +1,26 @@
 ---
-title: "Imitation Learning: Learn from Expert Demonstrations"
+title: "Imitation Learning: GAIL with Expert Demonstrations"
 sidebarTitle: "Imitation Learning"
-description: "Train a policy by cloning expert behavior on CartPole and Pendulum — collect expert demonstrations, then use supervised learning to fit a behavioral cloning policy."
+description: "Use GAIL to train a student policy on CartPole by imitating a PPO expert. A discriminator provides intrinsic rewards whenever the student fools it."
 ---
 
 Imitation learning trains a policy by mimicking an expert's behavior rather than learning through reward signals alone. Instead of exploring the environment and discovering a reward function, the agent observes a collection of (state, action) pairs produced by a trained expert and uses supervised learning to replicate those decisions. This approach can dramatically accelerate training when expert demonstrations are available, bypassing the slow trial-and-error process of conventional reinforcement learning.
 
-The two most common strategies are **Behavioral Cloning (BC)**, which directly fits a policy to expert (state, action) pairs, and **Generative Adversarial Imitation Learning (GAIL)**, which adds a discriminator that rewards the student for producing trajectories indistinguishable from the expert's.
-
-This tutorial covers both variants on two environments: **CartPole** (discrete actions) and **Pendulum** (continuous actions).
+The approach used here is **Generative Adversarial Imitation Learning (GAIL)**: a discriminator network is trained to distinguish expert (state, action) pairs from student pairs, and the student policy is rewarded for fooling the discriminator. This is more robust than plain behavioral cloning because it lets the student interact with the environment and corrects for distribution shift online.
 
 ---
 
 ## Key Concepts
 
 <Note>
-**Behavioral Cloning** treats imitation as pure supervised learning. The loss function is cross-entropy for discrete actions and MSE for continuous actions. The key limitation is **covariate shift**: small prediction errors compound over time and push the agent into states never seen in the training data.
+**Behavioral Cloning (BC)** treats imitation as pure supervised learning — cross-entropy loss for discrete actions, MSE for continuous. Its key limitation is **covariate shift**: small prediction errors compound over time and push the agent into states never seen during training.
 
-**GAIL** addresses covariate shift by letting the agent interact with the environment, rewarding it for producing trajectories that fool a discriminator network into thinking they come from the expert.
+**GAIL** addresses covariate shift by letting the agent interact with the environment. A discriminator labels expert data as 0 and student data as 1; the student is rewarded proportional to how well it fools the discriminator.
 </Note>
 
-## CartPole — Discrete Action Imitation
+## Environment Setup
 
-### Step 1 — Environment Setup
-
-The CartPole environment is wrapped to cap episodes at 200 steps:
+The CartPole-v1 environment is wrapped to cap episodes at 200 steps:
 
 ```python
 import gym
@@ -52,9 +48,9 @@ class MyWrapper(gym.Wrapper):
 env = MyWrapper()
 ```
 
-### Step 2 — Train the Expert (PPO)
+## Step 1 — Train the Expert (PPO)
 
-A PPO agent serves as the expert. It is trained until it achieves a perfect score of 200 per episode:
+A PPO agent serves as the expert. It is trained for 500 episodes until it achieves a perfect score of 200 per episode:
 
 ```python
 import torch
@@ -114,7 +110,7 @@ for i in range(500):
         print(i, test_result)
 ```
 
-### Step 3 — Collect Expert Demonstrations
+## Step 2 — Collect Expert Demonstrations
 
 Once trained, collect one episode of expert data and discard the expert model:
 
@@ -129,16 +125,16 @@ print(teacher_states.shape, teacher_actions.shape)
 # torch.Size([200, 4])  torch.Size([200, 1])
 ```
 
-### Step 4 — GAIL: Train the Student with a Discriminator
+## Step 3 — Build the Discriminator
 
-The discriminator takes `(state, one-hot action)` pairs and outputs the probability that the pair comes from the expert:
+The discriminator takes `(state, one-hot action)` pairs and outputs the probability that the pair comes from the expert. Because CartPole has discrete actions, the action is one-hot encoded before concatenation:
 
 ```python
 class Discriminator(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.sequential = torch.nn.Sequential(
-            torch.nn.Linear(6, 128),
+            torch.nn.Linear(6, 128),   # 4 state dims + 2 one-hot action dims
             torch.nn.ReLU(),
             torch.nn.Linear(128, 1),
             torch.nn.Sigmoid(),
@@ -154,7 +150,9 @@ class Discriminator(torch.nn.Module):
 discriminator = Discriminator()
 ```
 
-The student is trained in a GAN-style loop:
+## Step 4 — GAIL Training Loop
+
+The student is trained in a GAN-style loop. The discriminator learns to distinguish expert from student trajectories; the student is rewarded for trajectories the discriminator classifies as expert-like:
 
 ```python
 student = PPO()
@@ -195,93 +193,6 @@ copy_learn()
 <Tip>
 The key insight of GAIL: the discriminator labels expert data as 0 and student data as 1. The student's reward is `-log(prob_student)` — it is high when the discriminator classifies student data as coming from the expert (probability near 0).
 </Tip>
-
----
-
-## Pendulum — Continuous Action Imitation
-
-For continuous actions, the architecture changes: the policy outputs a mean `mu` and standard deviation `std` of a Gaussian distribution, and the discriminator concatenates `(state, action)` directly without one-hot encoding.
-
-### Expert Policy Network (Continuous)
-
-```python
-class Model(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc_statu = torch.nn.Sequential(
-            torch.nn.Linear(3, 128),
-            torch.nn.ReLU(),
-        )
-        self.fc_mu = torch.nn.Sequential(
-            torch.nn.Linear(128, 1),
-            torch.nn.Tanh(),
-        )
-        self.fc_std = torch.nn.Sequential(
-            torch.nn.Linear(128, 1),
-            torch.nn.Softplus(),
-        )
-
-    def forward(self, state):
-        state = self.fc_statu(state)
-        mu = self.fc_mu(state) * 2.0
-        std = self.fc_std(state)
-        return mu, std
-```
-
-### Continuous Discriminator
-
-```python
-class Discriminator(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.sequential = torch.nn.Sequential(
-            torch.nn.Linear(4, 128),  # 3 state dims + 1 action dim
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, 1),
-            torch.nn.Sigmoid(),
-        )
-
-    def forward(self, states, actions):
-        cat = torch.cat([states, actions], dim=1)
-        return self.sequential(cat)
-```
-
-### GAIL Training Loop (Pendulum)
-
-```python
-def copy_learn():
-    optimizer = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
-    bce_loss = torch.nn.BCELoss()
-
-    for i in range(20000):
-        with torch.no_grad():
-            teacher_states, _, teacher_actions, _, _ = teacher.get_data()
-
-        states, _, actions, next_states, overs = student.get_data()
-
-        prob_teacher = discriminator(teacher_states, teacher_actions)
-        prob_student = discriminator(states, actions)
-
-        loss_teacher = bce_loss(prob_teacher, torch.zeros_like(prob_teacher))
-        loss_student = bce_loss(prob_student, torch.ones_like(prob_student))
-        loss = loss_teacher + loss_student
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        rewards = -prob_student.log().detach()
-        # Undo the reward shift applied inside the PPO train() call
-        rewards = rewards * 8 - 8
-
-        student.train(states, rewards, actions, next_states, overs)
-
-        if i % 500 == 0:
-            test_result = sum([student.test(play=False) for _ in range(10)]) / 10
-            print(i, test_result)
-
-copy_learn()
-```
 
 ---
 

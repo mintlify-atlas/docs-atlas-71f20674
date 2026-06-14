@@ -1,32 +1,32 @@
 ---
-title: "Multi-Agent RL: Cooperative Combat with Independent Learners"
+title: "Multi-Agent RL: Cooperative Combat with Independent PPO"
 sidebarTitle: "Multi-Agent"
-description: "Train a team of 5 agents in a custom grid-world Combat environment using independent DQN learners, where agents coordinate to defeat an opposing bot team."
+description: "Train two cooperative agents in a 15×15 grid-world using shared PPO, where the team must defeat rule-based bots through independent learning."
 ---
 
 Multi-agent reinforcement learning (MARL) extends the single-agent setting to scenarios with multiple interacting decision-makers sharing a common environment. Agents may be cooperative, competitive, or a mixture of both. This tutorial trains a team of agents in a cooperative **Combat** grid-world where a team of learned agents must work together to defeat a team of rule-based bots.
 
-The simplest MARL approach is **independent learning**: each agent maintains its own policy and replay buffer and is trained as if the other agents were part of the (non-stationary) environment. Despite its simplicity, independent learning is effective in many cooperative settings because agents implicitly coordinate through shared rewards.
+The simplest MARL approach is **independent learning**: each agent maintains its own policy and is trained as if the other agents were part of the (non-stationary) environment. Despite its simplicity, independent learning is effective in many cooperative settings because agents implicitly coordinate through shared rewards.
 
 ---
 
 ## The Combat Environment
 
-The `Combat` class (from `combat.py`) simulates a 15×15 grid-world battle between two teams of 5 agents. Each agent can move in four directions, do nothing, or attack one of the 5 opponents. All agents start with 3 health points. The game ends when one team is eliminated or 100 steps have elapsed.
+The `Combat` class (from `combat.py`) simulates a 15×15 grid-world battle between two teams. In this notebook, both teams have 2 members. Each agent can move in four directions, do nothing, or attack one of the opponents. All agents start with 3 health points. The game ends when one team is eliminated or 100 steps have elapsed.
 
 ```python
 from combat import Combat
 
-env = Combat(grid_shape=(15, 15), n_agents=5, n_opponents=5)
+env = Combat(grid_shape=(15, 15), n_agents=2, n_opponents=2)
 observations = env.reset()
 
-# Sample random actions for all 5 agents
-actions = [env.action_space[i].sample() for i in range(5)]
+# Sample random actions for all 2 agents
+actions = env.action_space.sample()
 obs, rewards, dones, info = env.step(actions)
 ```
 
 <Tip>
-The `action_space` for each agent is `Discrete(5 + n_opponents)`: actions 0–3 are directional moves, action 4 is no-op, and actions 5–9 are attacks targeting opponents 0–4.
+The `action_space` for each agent is `Discrete(5 + n_opponents)`. With `n_opponents=2`, each agent has 7 actions: 0–4 are moves/no-op, and 5–6 attack opponent 0 or opponent 1.
 </Tip>
 
 ### Environment Interface
@@ -36,7 +36,7 @@ The `action_space` for each agent is `Discrete(5 + n_opponents)`: actions 0–3 
 | `reset()` | Returns a list of 150-element observation vectors, one per agent |
 | `step(agents_action)` | Returns `(observations, rewards, dones, info)` |
 | `get_agent_obs()` | Computes a 5×5 local observation window per agent, encoded as a 150-element flat vector |
-| `action_space` | `MultiAgentActionSpace` — list of `Discrete(10)` spaces |
+| `action_space` | `MultiAgentActionSpace` — list of `Discrete(7)` spaces (for 2 opponents) |
 | `observation_space` | `MultiAgentObservationSpace` — list of `Box` spaces |
 
 ### Action Space
@@ -49,7 +49,7 @@ class MultiAgentActionSpace(list):
         super().__init__(agents_action_space)
 
     def sample(self):
-        return [space.sample() for space in self._agents_action_space]
+        return [agent_action_space.sample() for agent_action_space in self._agents_action_space]
 ```
 
 ### Observation Space
@@ -135,7 +135,7 @@ def opps_action(self):
 
 ## Independent PPO Learner
 
-A single PPO network is shared across both agents in the simplified 2-agent version of the notebook. Each agent's observation (150 floats) is fed independently to the same network:
+A single PPO network is **shared** by both agents. Each agent's 150-element observation is fed independently through the same network, producing a distribution over 7 actions (5 moves + 2 attack targets):
 
 ```python
 import torch
@@ -146,7 +146,7 @@ class PPO:
         self.model_action = torch.nn.Sequential(
             torch.nn.Linear(150, 64), torch.nn.ReLU(),
             torch.nn.Linear(64, 64),  torch.nn.ReLU(),
-            torch.nn.Linear(64, 7),   # 5 moves + 2 attack targets (2-agent version)
+            torch.nn.Linear(64, 7),   # 5 moves/no-op + 2 attack targets
             torch.nn.Softmax(dim=1),
         )
         self.model_value = torch.nn.Sequential(
