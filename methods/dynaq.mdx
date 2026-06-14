@@ -1,0 +1,229 @@
+---
+title: "DynaQ: Model-Based Reinforcement Learning Planning"
+sidebarTitle: "DynaQ"
+description: "Implement the DynaQ algorithm, which interleaves real environment experience with simulated planning steps to accelerate Q-value learning."
+---
+
+One of the most powerful ideas in reinforcement learning is to make the most of every real interaction with the environment by also learning a model of how the environment works, then using that model to generate additional synthetic experience for free. DynaQ, introduced by Sutton (1990), does exactly this: it combines standard model-free Q-Learning with a learned world model so that each real transition triggers not just one Q-update but K additional planning updates replayed from the model's stored history. On the same cliff-walking task that takes plain Q-Learning 1,500 episodes to solve, DynaQ converges in around 300 episodes with K = 20 planning steps per real transition.
+
+## Environment Setup
+
+DynaQ runs on the same 4×12 cliff-walking grid used throughout this series. The grid has ground cells, trap cells along the bottom (reward −100), and a terminal goal at the bottom-right (reward −1). Cells outside the bottom row yield a reward of −1 per step.
+
+```python
+def get_state(row, col):
+    if row != 3:
+        return 'ground'
+    if row == 3 and col == 0:
+        return 'ground'
+    if row == 3 and col == 11:
+        return 'terminal'
+    return 'trap'
+
+
+def move(row, col, action):
+    if get_state(row, col) in ['trap', 'terminal']:
+        return row, col, 0
+
+    if action == 0:
+        row -= 1  # up
+    if action == 1:
+        row += 1  # down
+    if action == 2:
+        col -= 1  # left
+    if action == 3:
+        col += 1  # right
+
+    row = max(0, row)
+    row = min(3, row)
+    col = max(0, col)
+    col = min(11, col)
+
+    reward = -1
+    if get_state(row, col) == 'trap':
+        reward = -100
+
+    return row, col, reward
+```
+
+## The Three DynaQ Components
+
+DynaQ unifies three processes that run in tight coordination every time step:
+
+1. **Direct RL** — take a real action, observe a real transition, and update Q immediately with Q-Learning.
+2. **Model learning** — store the observed transition in a dictionary keyed by `(state, action)` so it can be replayed later.
+3. **Planning** — sample K random previously-seen transitions from the model and perform K additional Q-updates on them, amplifying learning without any new real interactions.
+
+## Data Structures
+
+```python
+import numpy as np
+
+# Q[row, col, action] — action-value table, initialised to zero
+Q = np.zeros([4, 12, 4])
+
+# history[(row, col, action)] = (next_row, next_col, reward)
+# This is the world model: a deterministic lookup table of observed transitions
+history = dict()
+```
+
+The `history` dictionary is the agent's internal model of the world. After observing that taking action `a` in state `(r, c)` led to `(r', c')` with reward `rwd`, the agent stores:
+
+```python
+history[(row, col, action)] = next_row, next_col, reward
+```
+
+## The DynaQ Algorithm
+
+<Steps>
+  <Step title="Choose an action with ε-greedy exploration">
+    At each step the agent consults the Q-table: with probability 0.1 it picks a random action, otherwise it picks the action with the highest Q-value.
+
+    ```python
+    import random
+
+    def get_action(row, col):
+        # 10% chance of random exploration
+        if random.random() < 0.1:
+            return random.choice(range(4))
+
+        # Greedy: exploit the best known action
+        return Q[row, col].argmax()
+    ```
+  </Step>
+
+  <Step title="Execute the action and compute the Q-Learning update">
+    The direct RL update follows the standard Q-Learning rule: the target is built from the maximum Q-value at the next state, making it off-policy.
+
+    ```python
+    def get_update(row, col, action, reward, next_row, next_col):
+        # Off-policy target: max over all actions at next state
+        target = 0.9 * Q[next_row, next_col].max()
+        target += reward
+
+        value = Q[row, col, action]
+
+        # TD error, scaled by learning rate α = 0.1
+        update = target - value
+        update *= 0.1
+
+        return update
+    ```
+  </Step>
+
+  <Step title="Update the world model">
+    Every observed transition is stored in the `history` dictionary. Because the environment is deterministic, each `(state, action)` key maps to exactly one outcome.
+
+    ```python
+    # Record this transition in the model
+    history[(row, col, action)] = next_row, next_col, reward
+    ```
+  </Step>
+
+  <Step title="Plan: replay K transitions from the model">
+    The planning loop draws K = 20 random entries from `history` and applies the same Q-Learning update to each. These are purely simulated — no real environment steps occur. This is the core of DynaQ: cheap simulated experience amplifies learning from each costly real interaction.
+
+    ```python
+    def q_planning():
+        # Replay 20 randomly sampled historical transitions
+        for _ in range(20):
+            # Pick a random state-action pair from previously seen transitions
+            row, col, action = random.choice(list(history.keys()))
+
+            # Retrieve the stored outcome from the model
+            next_row, next_col, reward = history[(row, col, action)]
+
+            # Apply a standard Q-Learning update
+            update = get_update(row, col, action, reward, next_row, next_col)
+            Q[row, col, action] += update
+    ```
+  </Step>
+
+  <Step title="Train the full DynaQ loop">
+    The complete training loop ties all four steps together. Notice that `q_planning()` is called **inside the inner while loop**, so 20 planning updates fire for every single real environment step.
+
+    ```python
+    def train():
+        for epoch in range(300):
+            row = random.choice(range(4))
+            col = 0
+            action = get_action(row, col)
+            reward_sum = 0
+
+            while get_state(row, col) not in ['terminal', 'trap']:
+                # Step 1: take a real action
+                next_row, next_col, reward = move(row, col, action)
+                reward_sum += reward
+                next_action = get_action(next_row, next_col)
+
+                # Step 2: direct Q-Learning update
+                update = get_update(row, col, action, reward, next_row, next_col)
+                Q[row, col, action] += update
+
+                # Step 3: update the world model
+                history[(row, col, action)] = next_row, next_col, reward
+
+                # Step 4: K=20 planning steps from the model
+                q_planning()
+
+                row = next_row
+                col = next_col
+                action = next_action
+
+            if epoch % 20 == 0:
+                print(epoch, reward_sum)
+
+
+    train()
+    # 0   -129
+    # 20  -108
+    # 40  -16
+    # 60  -12
+    # 80  -15
+    # 100 -13
+    ```
+
+    Notice how quickly the cumulative reward drops: by episode 40 the agent is already near-optimal. Plain Q-Learning typically needs hundreds more episodes to reach the same performance.
+  </Step>
+</Steps>
+
+## Visualising the Learned Policy
+
+Once training is complete, print the greedy action at every grid position to see the policy the agent has discovered:
+
+```python
+for row in range(4):
+    line = ''
+    for col in range(12):
+        action = Q[row, col].argmax()
+        action = {0: '↑', 1: '↓', 2: '←', 3: '→'}[action]
+        line += action
+    print(line)
+
+# Example output:
+# →→↓↓↓↓↓↓↓↓↓↓
+# ↓↓↓↓↓↓↓↓↓↓↓↓
+# →→→→→→→→→→→↓
+# ↑↑↑↑↑↑↑↑↑↑↑↑
+```
+
+The agent has learned to descend quickly from higher rows and then navigate rightward along row 2 before dropping into the terminal goal — avoiding the trap-filled bottom row (row 3, columns 1–10).
+
+## Why Planning Accelerates Learning
+
+<Note>
+Each real environment step is expensive: it requires an actual interaction. Each planning step costs only a dictionary lookup and an arithmetic update. With K = 20, every single real transition propagates reward information through **21 updates** (1 direct + 20 simulated). This is especially powerful early in training when the Q-table is sparse — planning recycled transitions from the first few episodes rapidly fill in Q-values that would otherwise take many more real interactions to discover.
+
+Increasing K further speeds up convergence but increases computation per real step. When the model contains errors (e.g., in stochastic environments), aggressive planning can also propagate those errors — in such cases a smaller K or periodic model validation is advisable.
+</Note>
+
+## DynaQ vs Plain Q-Learning
+
+| Property | Q-Learning | DynaQ |
+|---|---|---|
+| **Update source** | Real transitions only | Real transitions + simulated replays |
+| **Episodes to converge** | ~1,000–1,500 | ~40–60 |
+| **Updates per real step** | 1 | 1 + K (K = 20 here) |
+| **Memory required** | Q-table only | Q-table + history model |
+| **Works in stochastic envs** | Yes | Yes (model must capture distribution) |
+| **Planning overhead** | None | O(K) dictionary lookups per step |

@@ -1,0 +1,140 @@
+---
+title: "Set Up Your Environment for Simple RL"
+sidebarTitle: "Setup"
+description: "Install Python 3.9, PyTorch 1.12.1, and Gym 0.26.2 to run every notebook in the Simple Reinforcement Learning series."
+---
+
+Before you open your first notebook, you need a Python environment with the correct package versions pinned. The Simple Reinforcement Learning series was updated on **2023-05-05** to target Python 3.9, PyTorch 1.12.1, and Gym 0.26.2 — small version mismatches in any of these three packages can cause silent behavioural differences or outright import errors. This guide walks you through every step from a fresh machine to a running Jupyter session.
+
+## System Requirements
+
+- **Operating system:** Windows 10/11, macOS 12+, or any modern Linux distribution
+- **Python:** 3.9 (3.10+ is not guaranteed compatible)
+- **Package manager:** [Conda](https://docs.conda.io/en/latest/miniconda.html) (recommended) or [pyenv](https://github.com/pyenv/pyenv)
+- **Disk space:** ~3 GB (PyTorch CPU build; add ~2 GB for a CUDA build)
+- **GPU:** Optional — every notebook runs on CPU; a CUDA-capable GPU speeds up training but is not required
+
+<Note>
+  The series was upgraded on **2023-05-05**: Gym was bumped to **0.26.2**, Python to **3.9**, and PyTorch to **1.12.1**. If you cloned the repository before that date, pull the latest changes and recreate your environment using the versions shown below.
+</Note>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install Conda (or pyenv)">
+    Download and install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) for your operating system. Miniconda gives you the `conda` command without bundling hundreds of packages you do not need.
+
+    Verify the installation:
+
+    ```bash
+    conda --version
+    ```
+
+    If you prefer pyenv, follow the [pyenv installation guide](https://github.com/pyenv/pyenv#installation) and use `pyenv install 3.9.x` to get Python 3.9.
+  </Step>
+
+  <Step title="Create a dedicated Conda environment">
+    Create a new environment named `rl` with Python 3.9 pinned, then activate it:
+
+    ```bash
+    conda create -n rl python=3.9
+    conda activate rl
+    ```
+
+    Using an isolated environment keeps the project's pinned versions separate from your other Python projects.
+  </Step>
+
+  <Step title="Install the required packages">
+    With the `rl` environment active, install PyTorch, Gym, and the supporting libraries:
+
+    ```bash
+    pip install torch==1.12.1 gym==0.26.2 matplotlib numpy
+    ```
+
+    <CodeGroup>
+      ```bash CPU (default)
+      pip install torch==1.12.1 gym==0.26.2 matplotlib numpy
+      ```
+
+      ```bash CUDA 11.6
+      pip install torch==1.12.1+cu116 --extra-index-url https://download.pytorch.org/whl/cu116
+      pip install gym==0.26.2 matplotlib numpy
+      ```
+    </CodeGroup>
+
+    <Warning>
+      Do not upgrade PyTorch or Gym beyond the versions listed above without testing first. Gym's environment API changed significantly between 0.21 and 0.26, and the notebooks rely on the `terminated` / `truncated` step return signature introduced in 0.26.
+    </Warning>
+  </Step>
+
+  <Step title="Install Jupyter">
+    Install Jupyter Notebook inside the same environment so the kernel picks up all the packages you just installed:
+
+    ```bash
+    pip install jupyter
+    ```
+  </Step>
+
+  <Step title="Clone the repository">
+    Clone the Simple Reinforcement Learning repository from GitHub:
+
+    ```bash
+    git clone https://github.com/lansinuote/Simple_Reinforcement_Learning.git
+    ```
+
+    Then change into the project directory:
+
+    ```bash
+    cd Simple_Reinforcement_Learning
+    ```
+
+    The repository contains 18 numbered folders. Each folder holds one or more `.ipynb` notebooks and any helper files that chapter needs.
+  </Step>
+
+  <Step title="Launch Jupyter Notebook">
+    Start the Jupyter server from inside the project directory:
+
+    ```bash
+    jupyter notebook
+    ```
+
+    Your browser will open automatically at `http://localhost:8888`. Click any numbered folder to navigate to a chapter, then open its `.ipynb` file to start reading and running cells.
+  </Step>
+</Steps>
+
+## Verifying Your Installation
+
+After launching Jupyter, open a new notebook and run the following snippet to confirm all three core packages are present at the correct versions:
+
+```python
+import sys, torch, gym
+
+print("Python :", sys.version)
+print("PyTorch:", torch.__version__)
+print("Gym    :", gym.__version__)
+```
+
+You should see output similar to:
+
+```
+Python : 3.9.x | ...
+PyTorch: 1.12.1
+Gym    : 0.26.2
+```
+
+## Troubleshooting
+
+<Note>
+  Some notebooks import additional packages such as `pygame`, `box2d-py`, or `ale-py` for specific environments. If a cell raises a `ModuleNotFoundError`, install the missing package with `pip install <package-name>` in your terminal (with the `rl` environment active), then restart the Jupyter kernel and re-run the cell.
+</Note>
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `ModuleNotFoundError: No module named 'gym'` | Wrong Python kernel selected | In Jupyter, go to **Kernel → Change Kernel** and select the `rl` environment |
+| `AttributeError: 'tuple' object has no attribute 'shape'` | Gym < 0.26 returns a single value from `step()` | Upgrade to `gym==0.26.2` |
+| `RuntimeError: expected scalar type Float but found Double` | NumPy / PyTorch dtype mismatch | Add `.float()` when converting NumPy arrays to tensors |
+| Slow training even with a GPU | PyTorch CUDA build not installed | Install the CUDA variant shown in Step 3 |
+
+## Next Steps
+
+With your environment ready, open notebook **01** to begin with the multi-armed bandit problem — the simplest RL setting and the perfect place to build intuition before moving on to Markov Decision Processes and deep networks. Refer back to the [Introduction](/introduction) at any time for a map of where each chapter fits in the overall curriculum.

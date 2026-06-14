@@ -1,0 +1,376 @@
+---
+title: "Temporal-Difference Learning: Sarsa and Q-Learning"
+sidebarTitle: "TD Learning"
+description: "Implement Sarsa, N-step Sarsa, and Q-Learning — the core temporal-difference algorithms that learn directly from environment interaction without a model."
+---
+
+Temporal-difference (TD) learning sits at the heart of modern reinforcement learning. Unlike Monte Carlo methods, which wait until the end of an episode to update values, TD methods update estimates after every single step by bootstrapping from the current estimate of the next state's value. Unlike dynamic programming, TD methods require no model of the environment — they learn purely from raw experience. This page walks through three progressively powerful TD algorithms — Sarsa, N-step Sarsa, and Q-Learning — all demonstrated on a 4×12 cliff-walking grid where the agent must reach a goal while avoiding traps along the bottom edge.
+
+## The Environment
+
+The cliff-walking grid has four rows and twelve columns. Every cell is considered `ground` except for the bottom row, where cells in columns 1–10 are traps (reward −100) and column 11 is the terminal goal (reward −1 on approach). All other moves yield a reward of −1. The agent spawns somewhere in the leftmost column and must navigate to the goal.
+
+```python
+# Classify each cell as ground, trap, or terminal
+def get_state(row, col):
+    if row != 3:
+        return 'ground'
+
+    if row == 3 and col == 0:
+        return 'ground'
+
+    if row == 3 and col == 11:
+        return 'terminal'
+
+    return 'trap'
+
+
+# Execute an action and return the resulting position and reward
+def move(row, col, action):
+    # If already in a trap or at the terminal, no further movement
+    if get_state(row, col) in ['trap', 'terminal']:
+        return row, col, 0
+
+    # 0=up, 1=down, 2=left, 3=right
+    if action == 0:
+        row -= 1
+    if action == 1:
+        row += 1
+    if action == 2:
+        col -= 1
+    if action == 3:
+        col += 1
+
+    # Clamp to grid boundaries
+    row = max(0, row)
+    row = min(3, row)
+    col = max(0, col)
+    col = min(11, col)
+
+    # Trap cells carry a heavy negative reward
+    reward = -1
+    if get_state(row, col) == 'trap':
+        reward = -100
+
+    return row, col, reward
+```
+
+## The Q-Table
+
+Both Sarsa and Q-Learning store action-values in a Q-table — a three-dimensional NumPy array indexed by `[row, col, action]`. It is initialised to zero because the agent starts with no prior knowledge.
+
+```python
+import numpy as np
+
+# Q[row, col, action] holds the estimated value of taking `action` at (row, col)
+Q = np.zeros([4, 12, 4])
+
+Q.shape  # → (4, 12, 4)
+```
+
+## Epsilon-Greedy Exploration
+
+Both algorithms use ε-greedy action selection: with probability 0.1 the agent picks a random action, otherwise it greedily exploits the highest Q-value for the current state.
+
+```python
+import random
+
+def get_action(row, col):
+    # 10% chance of a random exploratory action
+    if random.random() < 0.1:
+        return random.choice(range(4))
+
+    # Otherwise take the action with the highest estimated value
+    return Q[row, col].argmax()
+```
+
+## Sarsa and Q-Learning
+
+<Tabs>
+  <Tab title="Sarsa (On-Policy)">
+
+Sarsa is an **on-policy** algorithm: it updates Q-values using the action actually chosen by the current policy at the next state. The name comes from the five-tuple it uses: `(s, a, r, s', a')`.
+
+<Note>
+**Sarsa update rule**
+
+```
+Q(s,a) ← Q(s,a) + α [ r + γ · Q(s′,a′) − Q(s,a) ]
+```
+
+- `α = 0.1` — learning rate  
+- `γ = 0.9` — discount factor  
+- `a′` is sampled from the **same** ε-greedy policy, so the update reflects actual behaviour
+</Note>
+
+```python
+def get_update(row, col, action, reward, next_row, next_col, next_action):
+    # Target uses the Q-value of the next state-action pair chosen by the policy
+    target = 0.9 * Q[next_row, next_col, next_action]
+    target += reward
+
+    value = Q[row, col, action]
+
+    # TD error scaled by the learning rate
+    update = target - value
+    update *= 0.1
+
+    return update
+```
+
+The training loop selects the next action **before** computing the update, then reuses that same `next_action` as the starting action for the following step — this is the defining characteristic of Sarsa.
+
+```python
+def train():
+    for epoch in range(1500):
+        row = random.choice(range(4))
+        col = 0
+
+        # Choose the first action before the loop
+        action = get_action(row, col)
+        reward_sum = 0
+
+        while get_state(row, col) not in ['terminal', 'trap']:
+            next_row, next_col, reward = move(row, col, action)
+            reward_sum += reward
+
+            # The next action is chosen now and will be used in the update
+            next_action = get_action(next_row, next_col)
+
+            update = get_update(row, col, action, reward,
+                                next_row, next_col, next_action)
+            Q[row, col, action] += update
+
+            row = next_row
+            col = next_col
+            action = next_action  # carry the chosen action forward
+
+        if epoch % 150 == 0:
+            print(epoch, reward_sum)
+
+
+train()
+# 0    -116
+# 150  -25
+# 300  -20
+# 450  -18
+# 600  -17
+```
+
+  </Tab>
+  <Tab title="Q-Learning (Off-Policy)">
+
+Q-Learning is an **off-policy** algorithm: it updates Q-values using the **greedy maximum** over all next-state actions, regardless of what action the ε-greedy policy would actually take. This decoupling allows Q-Learning to converge to the optimal policy even while following an exploratory behaviour policy.
+
+<Note>
+**Q-Learning update rule**
+
+```
+Q(s,a) ← Q(s,a) + α [ r + γ · max_a′ Q(s′,a′) − Q(s,a) ]
+```
+
+- `α = 0.1` — learning rate  
+- `γ = 0.9` — discount factor  
+- `max_a′ Q(s′,a′)` is the **greedy** value — the best possible next action, not the one taken
+</Note>
+
+```python
+def get_update(row, col, action, reward, next_row, next_col):
+    # Target uses the maximum Q-value of the next state — policy-independent
+    target = 0.9 * Q[next_row, next_col].max()
+    target += reward
+
+    value = Q[row, col, action]
+
+    # TD error scaled by the learning rate
+    update = target - value
+    update *= 0.1
+
+    return update
+```
+
+The training loop is almost identical to Sarsa, but `get_update` no longer requires `next_action` — the max operator makes the update independent of the behaviour policy.
+
+```python
+def train():
+    for epoch in range(1500):
+        row = random.choice(range(4))
+        col = 0
+
+        action = get_action(row, col)
+        reward_sum = 0
+
+        while get_state(row, col) not in ['terminal', 'trap']:
+            next_row, next_col, reward = move(row, col, action)
+            reward_sum += reward
+
+            next_action = get_action(next_row, next_col)
+
+            # No next_action needed — update uses max over all actions
+            update = get_update(row, col, action, reward, next_row, next_col)
+            Q[row, col, action] += update
+
+            row = next_row
+            col = next_col
+            action = next_action
+
+        if epoch % 100 == 0:
+            print(epoch, reward_sum)
+
+
+train()
+# 0    -118
+# 100  -49
+# 200  -31
+# 300  -20
+# 600  -12
+```
+
+  </Tab>
+</Tabs>
+
+## N-Step Sarsa
+
+Standard Sarsa bootstraps from a single next-step estimate. N-step Sarsa extends the return horizon to **N steps** before bootstrapping, reducing bias at the cost of some variance. The project uses N = 5 — the agent accumulates five transitions before computing a target for the oldest state in the buffer.
+
+The key insight is that each target is constructed by "unrolling" the discounted return backward through the stored rewards, then bootstrapping from the Q-value at the end of the window:
+
+```
+G_t = r_t + γ·r_{t+1} + γ²·r_{t+2} + ... + γ^{N-1}·r_{t+N-1} + γ^N · Q(s_{t+N}, a_{t+N})
+```
+
+```python
+import numpy as np
+import random
+
+Q = np.zeros([4, 12, 4])
+
+# Rolling buffers that hold the most recent N transitions
+state_list  = []
+action_list = []
+reward_list = []
+
+
+def get_update_list(next_row, next_col, next_action):
+    # Bootstrap from the Q-value at the end of the N-step window
+    target = Q[next_row, next_col, next_action]
+
+    # Walk backward through the buffer, accumulating discounted returns
+    # Order: [4, 3, 2, 1, 0] → reversed later to [0, 1, 2, 3, 4]
+    target_list = []
+    for i in reversed(range(5)):
+        target = 0.9 * target + reward_list[i]
+        target_list.append(target)
+
+    target_list = list(reversed(target_list))
+
+    # Current Q-values for each buffered state-action pair
+    value_list = []
+    for i in range(5):
+        r, c = state_list[i]
+        a = action_list[i]
+        value_list.append(Q[r, c, a])
+
+    # TD errors for each step in the buffer
+    update_list = []
+    for i in range(5):
+        update = target_list[i] - value_list[i]
+        update *= 0.1
+        update_list.append(update)
+
+    return update_list
+```
+
+Training accumulates five steps before beginning updates and flushes the remaining buffer at episode end:
+
+```python
+def train():
+    for epoch in range(1500):
+        row = random.choice(range(4))
+        col = 0
+        action = get_action(row, col)
+        reward_sum = 0
+
+        state_list.clear()
+        action_list.clear()
+        reward_list.clear()
+
+        while get_state(row, col) not in ['terminal', 'trap']:
+            next_row, next_col, reward = move(row, col, action)
+            reward_sum += reward
+            next_action = get_action(next_row, next_col)
+
+            state_list.append([row, col])
+            action_list.append(action)
+            reward_list.append(reward)
+
+            # Wait until the buffer has exactly N=5 transitions
+            if len(state_list) == 5:
+                update_list = get_update_list(next_row, next_col, next_action)
+
+                # Update only the oldest (first) entry in the buffer
+                r, c = state_list[0]
+                a = action_list[0]
+                Q[r, c, a] += update_list[0]
+
+                # Slide the window forward
+                state_list.pop(0)
+                action_list.pop(0)
+                reward_list.pop(0)
+
+            row = next_row
+            col = next_col
+            action = next_action
+
+        # Flush remaining entries after the episode ends
+        for i in range(len(state_list)):
+            r, c = state_list[i]
+            a = action_list[i]
+            Q[r, c, a] += update_list[i]
+
+        if epoch % 100 == 0:
+            print(epoch, reward_sum)
+
+
+train()
+# 0    -250
+# 100  -16
+# 200  -23
+```
+
+## Visualising the Learned Policy
+
+After training, you can visualise the greedy policy by printing the highest-valued action at every grid cell:
+
+```python
+for row in range(4):
+    line = ''
+    for col in range(12):
+        action = Q[row, col].argmax()
+        action = {0: '↑', 1: '↓', 2: '←', 3: '→'}[action]
+        line += action
+    print(line)
+
+# Example output (Q-Learning):
+# →→→→→→↓→→↓→↓
+# ↓→→↓→→→→→↓→↓
+# →→→→→→→→→→→↓
+# ↑↑↑↑↑↑↑↑↑↑↑↑
+```
+
+The bottom row shows the agent has learned to avoid the traps (↑ means it would move up out of danger).
+
+## Algorithm Comparison
+
+| Property | Sarsa | Q-Learning |
+|---|---|---|
+| **Policy type** | On-policy | Off-policy |
+| **Update uses** | `Q(s′, a′)` — action taken | `max Q(s′, *)` — best action |
+| **Exploration effect** | Update reflects ε-greedy behaviour | Update always targets optimal |
+| **Cliff edge** | Safer — penalises risky paths explored during training | Optimal — finds shortest path but may fall more during training |
+| **Convergence** | Converges to optimal policy **under** the behaviour policy | Converges to the globally optimal Q-function |
+| **Parameter sensitivity** | More stable with high ε | Slightly more sensitive to exploration noise |
+
+<Note>
+The practical consequence on cliff-walking: Sarsa learns a **safer path** that hugs the top rows, because its on-policy updates make it "aware" that its own exploration can sometimes walk near traps. Q-Learning finds the **shorter optimal path** along the cliff edge, because its off-policy update always targets the maximum — it ignores that the behaviour policy might occasionally stumble.
+</Note>

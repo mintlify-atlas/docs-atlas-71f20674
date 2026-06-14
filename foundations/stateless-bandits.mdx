@@ -1,0 +1,254 @@
+---
+title: "Stateless Bandits: Greedy, UCB, and Thompson Sampling"
+sidebarTitle: "Stateless Bandits"
+description: "Implement four multi-armed bandit algorithms — Greedy, Decaying Greedy, UCB, and Thompson Sampling — and compare their performance on a 10-arm slot machine problem."
+---
+
+The **multi-armed bandit** problem is one of the simplest settings for studying reinforcement learning. There is no state — you just pull one of _K_ levers and collect a stochastic reward. The challenge is deciding _which_ lever to pull next given only the history of past plays.
+
+## Problem Setup
+
+We model 10 slot machines, each with an unknown win probability drawn uniformly from `[0, 1]`.
+
+```python
+import numpy as np
+
+# 每个老虎机的中奖概率，0-1之间的均匀分布
+# Win probability for each machine, uniform on [0, 1]
+probs = np.random.uniform(size=10)
+
+# 记录每个老虎机的返回值 — Record each machine's results
+# Initialise with a dummy value of 1 to avoid division-by-zero in mean
+rewards = [[1] for _ in range(10)]
+
+probs, rewards
+```
+
+## Exploration vs Exploitation
+
+The fundamental tension in bandit problems:
+
+- **Exploitation**: pull the arm with the highest estimated reward so far.
+- **Exploration**: occasionally try other arms in case the estimate is wrong.
+
+Too much exploitation leads to premature convergence on a sub-optimal arm. Too much exploration wastes pulls on arms that are already known to be bad.
+
+## Algorithms
+
+<Tabs>
+
+<Tab title="Greedy (ε = 0.01)">
+
+The basic greedy algorithm picks the arm with the highest mean reward with probability `1 – ε`, and a uniformly random arm with probability `ε = 0.01`.
+
+```python
+import random
+
+
+# 贪婪算法 — Greedy algorithm
+def choose_one():
+    # 有小概率随机选择一根拉杆 — Small probability of random arm
+    if random.random() < 0.01:
+        return random.randint(0, 9)
+
+    # 计算每个老虎机的奖励平均 — Compute mean reward per machine
+    rewards_mean = [np.mean(i) for i in rewards]
+
+    # 选择期望奖励估值最大的拉杆 — Choose arm with highest estimated reward
+    return np.argmax(rewards_mean)
+
+
+def try_and_play():
+    i = choose_one()
+
+    # 玩老虎机，得到结果 — Play the machine, get result
+    reward = 0
+    if random.random() < probs[i]:
+        reward = 1
+
+    # 记录玩的结果 — Record the result
+    rewards[i].append(reward)
+
+
+def get_result():
+    # 玩N次 — Play N times
+    for _ in range(5000):
+        try_and_play()
+
+    # 期望的最好结果 — Best possible expected result
+    target = probs.max() * 5000
+
+    # 实际玩出的结果 — Actual result obtained
+    result = sum([sum(i) for i in rewards])
+
+    return target, result
+
+
+get_result()
+# Example output: (4150.02, 4077)
+```
+
+Because `ε` is fixed at 1 %, the algorithm keeps exploring even late in the game when there is little to learn.
+
+</Tab>
+
+<Tab title="Decaying Greedy">
+
+Instead of a fixed `ε`, the exploration probability decays as `1 / total_plays_so_far`. This gives heavy exploration early on but converges to pure exploitation.
+
+```python
+import random
+
+
+# 随机选择的概率递减的贪婪算法 — Decaying greedy algorithm
+def choose_one():
+    # 求出现在已经玩了多少次了 — Total plays so far
+    played_count = sum([len(i) for i in rewards])
+
+    # 随机选择的概率逐渐下降 — Decaying exploration probability
+    if random.random() < 1 / played_count:
+        return random.randint(0, 9)
+
+    # 计算每个老虎机的奖励平均 — Compute mean reward per machine
+    rewards_mean = [np.mean(i) for i in rewards]
+
+    # 选择期望奖励估值最大的拉杆 — Choose best arm
+    return np.argmax(rewards_mean)
+```
+
+With decaying `ε` the agent scored `4540` against a target of `4555` — significantly closer than the fixed-`ε` variant.
+
+</Tab>
+
+<Tab title="UCB (Upper Confidence Bound)">
+
+UCB adds an **uncertainty bonus** to each arm's mean reward. Arms that have been played fewer times have a larger bonus, encouraging the agent to explore under-sampled options.
+
+```python
+import random
+
+
+# 上置信界算法 — UCB algorithm
+def choose_one():
+    # 求出每个老虎机各玩了多少次
+    # Count how many times each machine has been played
+    played_count = [len(i) for i in rewards]
+    played_count = np.array(played_count)
+
+    # 求出上置信界
+    # Numerator: sqrt of total plays (slows growth)
+    # Denominator: 2 * individual plays (speeds growth per-arm)
+    # As plays accumulate, the bonus shrinks → less exploration needed
+    fenzi = played_count.sum() ** 0.5
+    fenmu = played_count * 2
+    ucb = fenzi / fenmu
+
+    # ucb本身取根号 — Take sqrt to compress the range
+    ucb = ucb ** 0.5
+
+    # 计算每个老虎机的奖励平均 — Mean reward per machine
+    rewards_mean = [np.mean(i) for i in rewards]
+    rewards_mean = np.array(rewards_mean)
+
+    # ucb和期望求和 — Add bonus to mean
+    ucb += rewards_mean
+
+    return ucb.argmax()
+```
+
+UCB is principled: it selects the arm that maximises an **optimistic** estimate of reward, shrinking the confidence interval as more data arrives.
+
+</Tab>
+
+<Tab title="Thompson Sampling">
+
+Thompson Sampling maintains a **Beta distribution** over the win probability of each arm. It samples from each distribution and plays the arm with the highest sample.
+
+```python
+# beta分布测试 — Beta distribution demo
+print('当数字小的时候，beta分布的概率有很大的随机性')
+# When numbers are small, Beta(1,1) is very random
+for _ in range(5):
+    print(np.random.beta(1, 1))
+
+print('当数字大时，beta分布逐渐稳定')
+# When numbers are large, Beta(1e5, 1e5) ≈ 0.5
+for _ in range(5):
+    print(np.random.beta(1e5, 1e5))
+```
+
+```python
+import random
+
+
+def choose_one():
+    # 求出每个老虎机出1的次数+1
+    # Count wins (1s) + 1 per machine (Laplace smoothing)
+    count_1 = [sum(i) + 1 for i in rewards]
+
+    # 求出每个老虎机出0的次数+1 — Count losses + 1
+    count_0 = [sum(1 - np.array(i)) + 1 for i in rewards]
+
+    # 按照beta分布计算奖励分布
+    # Sample estimated win probability from Beta distribution
+    beta = np.random.beta(count_1, count_0)
+
+    return beta.argmax()
+```
+
+Thompson Sampling naturally balances exploration and exploitation: uncertain arms (few plays) have wide Beta distributions that sometimes produce high samples, encouraging exploration.
+
+</Tab>
+
+</Tabs>
+
+## Comparison
+
+All four algorithms share the same `try_and_play()` and `get_result()` structure — only `choose_one()` changes.
+
+```python
+def try_and_play():
+    i = choose_one()
+
+    # 玩老虎机，得到结果 — Play the machine
+    reward = 0
+    if random.random() < probs[i]:
+        reward = 1
+
+    # 记录玩的结果 — Record the result
+    rewards[i].append(reward)
+
+
+def get_result():
+    # 玩N次 — Play N times
+    for _ in range(5000):
+        try_and_play()
+
+    # 期望的最好结果 — Theoretical best
+    target = probs.max() * 5000
+
+    # 实际玩出的结果 — Actual total reward
+    result = sum([sum(i) for i in rewards])
+
+    return target, result
+```
+
+Typical results over 5 000 plays (exact values vary due to random `probs`):
+
+| Algorithm | Target | Actual | Gap |
+|---|---|---|---|
+| Greedy (ε=0.01) | ~4150 | ~4077 | ~73 |
+| Decaying Greedy | ~4555 | ~4540 | ~15 |
+| UCB | ~4936 | ~4553 | ~383 |
+| Thompson Sampling | ~4698 | ~4680 | ~18 |
+
+<Note>
+The UCB gap looks large in this run because UCB explores more aggressively during the burn-in phase. Over longer horizons it typically matches or outperforms greedy methods.
+</Note>
+
+## Key Takeaways
+
+- **Greedy** is simple but converges prematurely with a fixed `ε`.
+- **Decaying Greedy** adapts the exploration rate and often performs well.
+- **UCB** is theoretically motivated with provable regret bounds.
+- **Thompson Sampling** uses Bayesian posterior sampling and tends to perform well in practice with little hyperparameter tuning.

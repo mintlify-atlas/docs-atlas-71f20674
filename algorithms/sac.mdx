@@ -1,0 +1,389 @@
+---
+title: "SAC: Soft Actor-Critic with Maximum Entropy"
+sidebarTitle: "SAC"
+description: "Implement Soft Actor-Critic (SAC) on Pendulum and CartPole environments — a maximum-entropy off-policy algorithm with automatic temperature tuning."
+---
+
+DDPG produces deterministic policies that can be brittle: once training converges the policy commits to a single action for each state, losing all exploratory behaviour. **Soft Actor-Critic (SAC)** addresses this by augmenting the reward with an **entropy bonus**. The agent is incentivised to be as random as possible while still maximising reward, which encourages exploration, robustness to model errors, and often faster convergence. SAC also employs **two Q-networks** (twin critics) whose minimum is used to compute targets, reducing the systematic overestimation that plagues single-critic methods.
+
+## Maximum Entropy Framework
+
+The SAC objective is:
+
+```
+J(π) = E [ Σ_t ( r_t + α · H(π(·|s_t)) ) ]
+```
+
+where `H(π) = -E[log π(a|s)]` is the entropy of the policy. The temperature parameter `α` controls the trade-off between reward maximisation and entropy maximisation. In full SAC, `α` is itself a learnable parameter automatically tuned to hit a target entropy level.
+
+## Architecture Overview
+
+<Steps>
+  <Step title="Stochastic actor">
+    For continuous actions: outputs mean `μ` and std `σ` of a Gaussian. Actions are sampled via the reparameterisation trick `a = μ + ε·σ`, keeping gradients differentiable.  
+    For discrete actions: outputs a Softmax probability distribution.
+  </Step>
+  <Step title="Twin critics">
+    Two separate Q-networks `Q1(s,a)` and `Q2(s,a)`. The target uses `min(Q1, Q2)` to counteract overestimation bias.
+  </Step>
+  <Step title="Target networks">
+    Each critic has a corresponding target network updated via soft update (τ=0.005).
+  </Step>
+  <Step title="Automatic temperature tuning">
+    `α = exp(log_α)` is a learnable scalar optimised to satisfy `H(π) ≈ H_target` where `H_target = -dim(A)`.
+  </Step>
+</Steps>
+
+## Pendulum Variant (Continuous Actions)
+
+### Environment
+
+```python
+import gym
+
+class MyWrapper(gym.Wrapper):
+    def __init__(self):
+        env = gym.make('Pendulum-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
+
+### Actor Network (Gaussian Policy with Reparameterisation)
+
+The actor outputs `(action, entropy)`. The action is sampled using the reparameterisation trick so that gradients flow through the sampling operation.
+
+```python
+import torch
+
+class ModelAction(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc_state = torch.nn.Sequential(
+            torch.nn.Linear(3, 128),
+            torch.nn.ReLU(),
+        )
+        self.fc_mu  = torch.nn.Linear(128, 1)
+        self.fc_std = torch.nn.Sequential(
+            torch.nn.Linear(128, 1),
+            torch.nn.Softplus(),
+        )
+
+    def forward(self, state):
+        # [b, 3] → [b, 128]
+        state = self.fc_state(state)
+
+        # [b, 128] → [b, 1]
+        mu  = self.fc_mu(state)
+
+        # [b, 128] → [b, 1]  (std > 0 via Softplus)
+        std = self.fc_std(state)
+
+        # Define the distribution
+        dist = torch.distributions.Normal(mu, std)
+
+        # Reparameterised sample: a = μ + ε·σ
+        action = dist.rsample()
+
+        # Entropy of the Gaussian: -log_prob(a)
+        entropy = -dist.log_prob(action)
+
+        return action, entropy
+
+
+model_action = ModelAction()
+```
+
+### Twin Critic Networks
+
+```python
+class ModelValue(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.sequential = torch.nn.Sequential(
+            torch.nn.Linear(4, 128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 1),
+        )
+
+    def forward(self, state, action):
+        # Concatenate state and action: [b, 3+1] → [b, 4]
+        state = torch.cat([state, action], dim=1)
+        # [b, 4] → [b, 1]
+        return self.sequential(state)
+
+
+# Twin critics + their target copies
+model_value1 = ModelValue()
+model_value2 = ModelValue()
+
+model_value_next1 = ModelValue()
+model_value_next2 = ModelValue()
+
+model_value_next1.load_state_dict(model_value1.state_dict())
+model_value_next2.load_state_dict(model_value2.state_dict())
+```
+
+### Automatic Temperature Parameter
+
+```python
+import math
+
+# alpha is stored in log-space for numerical stability;
+# alpha.exp() recovers the actual temperature
+alpha = torch.tensor(math.log(0.01))
+alpha.requires_grad = True
+
+alpha
+```
+
+### Target Computation
+
+The target includes the entropy bonus from the **next** state:
+
+```python
+def get_target(reward, next_state, over):
+    # Sample action and entropy for next_state
+    action, entropy = model_action(next_state)  # [b, 1], [b, 1]
+
+    # Min of two target critics
+    target1 = model_value_next1(next_state, action)
+    target2 = model_value_next2(next_state, action)
+    target  = torch.min(target1, target2)
+
+    # Entropy-augmented target: Q_target + α · H
+    target  += alpha.exp() * entropy
+
+    target  *= 0.99
+    target  *= (1 - over)
+    target  += reward
+    return target
+```
+
+### Actor Loss
+
+```python
+def get_loss_action(state):
+    action, entropy = model_action(state)   # [b, 1], [b, 1]
+
+    value1 = model_value1(state, action)
+    value2 = model_value2(state, action)
+    value  = torch.min(value1, value2)
+
+    # Maximise (Q + α·H) → minimise -(Q + α·H)
+    loss_action  = -alpha.exp() * entropy
+    loss_action -= value
+
+    return loss_action.mean(), entropy
+```
+
+### Soft Update and Training Loop
+
+```python
+def soft_update(model, model_next):
+    for param, param_next in zip(model.parameters(), model_next.parameters()):
+        value = param_next.data * 0.995 + param.data * 0.005
+        param_next.data.copy_(value)
+
+
+def train():
+    optimizer_action = torch.optim.Adam(model_action.parameters(),  lr=3e-4)
+    optimizer_value1 = torch.optim.Adam(model_value1.parameters(),  lr=3e-3)
+    optimizer_value2 = torch.optim.Adam(model_value2.parameters(),  lr=3e-3)
+    optimizer_alpha  = torch.optim.Adam([alpha], lr=3e-4)
+    loss_fn = torch.nn.MSELoss()
+
+    for epoch in range(200):
+        update_data()
+
+        for i in range(200):
+            state, action, reward, next_state, over = get_sample()
+
+            target = get_target(reward, next_state, over).detach()
+
+            # ── Critic 1 update ───────────────────────────────────────
+            loss_value1 = loss_fn(model_value1(state, action), target)
+            optimizer_value1.zero_grad()
+            loss_value1.backward()
+            optimizer_value1.step()
+
+            # ── Critic 2 update ───────────────────────────────────────
+            loss_value2 = loss_fn(model_value2(state, action), target)
+            optimizer_value2.zero_grad()
+            loss_value2.backward()
+            optimizer_value2.step()
+
+            # ── Actor update ──────────────────────────────────────────
+            loss_action, entropy = get_loss_action(state)
+            optimizer_action.zero_grad()
+            loss_action.backward()
+            optimizer_action.step()
+
+            # ── Alpha (temperature) update ────────────────────────────
+            # Target entropy = -dim(action) = -1 for Pendulum
+            loss_alpha = -(alpha * (entropy + 1).detach()).mean()
+            optimizer_alpha.zero_grad()
+            loss_alpha.backward()
+            optimizer_alpha.step()
+
+            # ── Soft update target networks ───────────────────────────
+            soft_update(model_value1, model_value_next1)
+            soft_update(model_value2, model_value_next2)
+
+        if epoch % 20 == 0:
+            print(epoch, len(datas),
+                  sum([test(play=False) for _ in range(3)]) / 3)
+
+train()
+```
+
+## CartPole Variant (Discrete Actions)
+
+For discrete action spaces the entropy is computed analytically from the probability distribution rather than by sampling.
+
+### Networks
+
+```python
+import torch
+
+# Actor: state (4) → action probabilities (2)
+model_action = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+    torch.nn.Softmax(dim=1),
+)
+
+# Twin critics: state (4) → Q-values for each action (2)
+model_value1 = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+
+model_value2 = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+
+model_value_next1 = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+
+model_value_next2 = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+
+model_value_next1.load_state_dict(model_value1.state_dict())
+model_value_next2.load_state_dict(model_value2.state_dict())
+```
+
+### Entropy from Discrete Distribution
+
+For discrete policies the entropy is computed directly from the probability vector — no sampling needed.
+
+```python
+def get_target(reward, next_state, over):
+    # Probability distribution over actions: [b, 4] → [b, 2]
+    prob = model_action(next_state)
+
+    # Entropy: -Σ p · log(p)  →  [b, 2] → [b, 1]
+    entropy = prob * torch.log(prob + 1e-8)
+    entropy = -entropy.sum(dim=1, keepdim=True)
+
+    # Min of two target critics: [b, 4] → [b, 2]
+    target1 = model_value_next1(next_state)
+    target2 = model_value_next2(next_state)
+    target  = torch.min(target1, target2)
+
+    # Expected value under the current policy: E_a[Q(s, a)]
+    target  = (prob * target).sum(dim=1, keepdim=True)
+
+    # Add entropy bonus: [b, 1] + [b, 1]
+    target  += alpha.exp() * entropy
+
+    target  *= 0.99
+    target  *= (1 - over)
+    target  += reward
+    return target
+
+
+def get_loss_action(state):
+    # [b, 4] → [b, 2]
+    prob    = model_action(state)
+
+    # Entropy: [b, 2] → [b, 1]
+    entropy = prob * (prob + 1e-8).log()
+    entropy = -entropy.sum(dim=1, keepdim=True)
+
+    # Expected Q under current policy (twin critics)
+    value1  = model_value1(state)    # [b, 2]
+    value2  = model_value2(state)    # [b, 2]
+    value   = torch.min(value1, value2)
+
+    # Weighted sum: E_a[Q(s, a)] → [b, 1]
+    value   = (prob * value).sum(dim=1, keepdim=True)
+
+    # Maximise Q + α·H
+    loss_action = -(alpha.exp() * entropy + value).mean()
+    return loss_action, entropy
+```
+
+## Continuous vs Discrete SAC
+
+<Tabs>
+  <Tab title="Continuous (Pendulum)">
+    - Actor outputs Gaussian `(μ, σ)`.
+    - Entropy is `-log_prob(a)` under the sampled action.
+    - Critic takes `[state, action]` as input.
+    - Reparameterisation trick enables gradients through sampling.
+  </Tab>
+  <Tab title="Discrete (CartPole)">
+    - Actor outputs Softmax probabilities.
+    - Entropy is computed analytically: `-Σ p · log p`.
+    - Critic takes state only, outputs Q-values for all actions.
+    - No reparameterisation needed — expectations are computed in closed form.
+  </Tab>
+</Tabs>
+
+## Why SAC Outperforms DDPG
+
+| Feature | DDPG | SAC |
+|---------|------|-----|
+| Policy type | Deterministic | Stochastic (maximum entropy) |
+| Exploration | Manual noise (e.g. OU) | Intrinsic via entropy bonus |
+| Critics | Single Q-network | Twin Q-networks (min target) |
+| Temperature | N/A | Automatic tuning |
+| Sample efficiency | Moderate | High |
+
+<Tip>
+The automatic alpha tuning is a key advantage of full SAC over simplified versions. The target entropy is set to `-dim(A)` for continuous actions (e.g. -1 for Pendulum). If the current entropy is below this target, alpha increases to encourage more exploration; if above, alpha decreases to focus the policy.
+</Tip>
+
+<Warning>
+Twin critics add computational overhead but are critical for stability. Using a single critic in SAC often leads to aggressive overestimation, causing the actor to exploit erroneous Q-values and destabilise training.
+</Warning>

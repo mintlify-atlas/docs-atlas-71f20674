@@ -1,0 +1,190 @@
+---
+title: "OpenAI Gym: Environments for Reinforcement Learning"
+sidebarTitle: "Gym Environments"
+description: "Learn how to create, reset, step through, and visualize OpenAI Gym environments like CartPole and LunarLander for reinforcement learning experiments."
+---
+
+OpenAI Gym provides a standardized collection of environments for reinforcement learning research. Each environment exposes a common API — `reset()`, `step()`, and `render()` — so that algorithms can be developed and tested without modification across a wide range of tasks.
+
+## What is Gym?
+
+Gym environments simulate a **world** in which an agent can act. The agent receives observations of the world's state, takes actions, and collects scalar rewards. Your goal as a researcher is to find a policy (a mapping from states to actions) that maximizes cumulative reward.
+
+Common environments include:
+
+| Environment | Task |
+|---|---|
+| `CartPole-v0` | Balance a pole on a moving cart |
+| `LunarLander-v2` | Land a spacecraft on a pad |
+| `FrozenLake-v1` | Navigate a grid without falling into holes |
+
+## Installation
+
+```bash
+pip install gym==0.26
+```
+
+<Note>
+If you encounter errors, install any additional packages that the error message mentions (e.g., `box2d-py` for LunarLander).
+</Note>
+
+## Creating and Rendering Environments
+
+<Steps>
+
+### Create the environment
+
+Use `gym.make()` with `render_mode='rgb_array'` so you can capture frames programmatically.
+
+```python
+import gym
+from matplotlib import pyplot as plt
+%matplotlib inline
+
+# 创建一个游戏环境 — Create a game environment
+env = gym.make('CartPole-v0', render_mode='rgb_array')
+
+# 初始化游戏 — Initialize the game
+env.reset()
+
+# 显示游戏 — Display the game
+plt.imshow(env.render())
+plt.show()
+
+# 关闭游戏 — Close the game
+env.close()
+```
+
+### Play random actions in LunarLander
+
+The `step()` method returns `(state, reward, terminated, truncated, info)`. Combine `terminated` and `truncated` into a single `over` flag as shown below.
+
+```python
+from IPython import display
+import time
+
+# 创建月球着陆 — Create the lunar lander
+env = gym.make('LunarLander-v2', render_mode='rgb_array')
+
+# 初始化游戏 — Initialize the game
+state = env.reset()
+
+# 随机玩N个动作 — Play N random actions
+for i in range(300):
+    action = env.action_space.sample()
+    state, reward, terminated, truncated, info = env.step(action)
+    over = terminated or truncated
+
+    if i % 5 == 0:  # 跳帧 — Skip frames
+        # 打印动画 — Print animation
+        display.clear_output(wait=True)
+        plt.imshow(env.render())
+        plt.show()
+
+    # 游戏结束了就重置 — Reset when game ends
+    if over:
+        state, info = env.reset()
+
+# 关闭游戏 — Close the game
+env.close()
+```
+
+</Steps>
+
+## Inspecting the Action and Observation Spaces
+
+After creating an environment you can query its spaces to understand how many actions are available and the range of valid observations.
+
+<CodeGroup>
+
+```python Action Space
+# 游戏的动作空间 — Action space
+env.action_space
+# Discrete(4)
+```
+
+```python Observation Space
+# 游戏的状态空间 — Observation space
+env.observation_space.high, env.observation_space.low
+# (array([1.5, 1.5, 5., 5., 3.1415927, 5., 1., 1.], dtype=float32),
+#  array([-1.5, -1.5, -5., -5., -3.1415927, -5., -0., -0.], dtype=float32))
+```
+
+```python Reward Range
+# 反馈值空间 — Reward range
+env.reward_range
+# (-inf, inf)
+```
+
+</CodeGroup>
+
+<Note>
+`Discrete(4)` means the agent may choose one of 4 discrete integer actions: `0`, `1`, `2`, or `3`. Continuous action spaces use `Box` instead.
+</Note>
+
+## The `MyWrapper` Pattern
+
+Later notebooks (e.g., the DQN series) use a thin wrapper around the environment that standardises the `step()` return signature to `(state, reward, done, info)` — collapsing `terminated` and `truncated` into a single Boolean and adding an optional step limit.
+
+```python
+import gym
+
+
+# 定义环境 — Define the environment
+class MyWrapper(gym.Wrapper):
+
+    def __init__(self):
+        env = gym.make('CartPole-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
+
+<Tip>
+Wrapping the environment hides the `terminated`/`truncated` distinction introduced in Gym 0.26 and enforces a maximum episode length. This makes your training loop cleaner and more reproducible.
+</Tip>
+
+## Playing Interactively
+
+You can also play Gym games yourself using keyboard mappings — though this requires a graphical display:
+
+```python
+import gym
+import pygame
+from gym.utils.play import play
+
+# 定义按键映射 — Define key mapping
+mapping = {(pygame.K_LEFT,): 0, (pygame.K_RIGHT,): 1}
+
+# 直接玩游戏 — Play the game directly (requires a graphical interface)
+# play(gym.make('CartPole-v0'), keys_to_action=mapping)
+```
+
+## Summary
+
+| Concept | API |
+|---|---|
+| Create environment | `gym.make('EnvName-v0', render_mode='rgb_array')` |
+| Reset episode | `env.reset()` → initial state |
+| Take action | `env.step(action)` → `(state, reward, terminated, truncated, info)` |
+| Random action | `env.action_space.sample()` |
+| Action count | `env.action_space` (Discrete) |
+| State bounds | `env.observation_space.high / .low` |
+| Cleanup | `env.close()` |

@@ -1,0 +1,329 @@
+---
+title: "Deep Q-Networks: DQN, Double DQN, and Dueling DQN"
+sidebarTitle: "DQN"
+description: "Implement DQN with experience replay and target networks, then extend it to Double DQN and Dueling DQN using PyTorch and CartPole/Pendulum environments."
+---
+
+Deep Q-Networks (DQN) bridge the gap between classical Q-learning and modern deep learning by using a neural network to approximate the action-value function Q(s, a). Rather than storing Q-values in a table, the network generalises across the continuous state space. Two critical inventions make training stable: an **experience replay buffer** that breaks temporal correlations in the data, and a periodically-frozen **target network** that provides stable regression targets. This page walks through the single-model baseline, the dual-model CartPole and Pendulum variants, and then shows how Double DQN and Dueling DQN improve on the original design.
+
+## Environment Setup
+
+All DQN notebooks wrap the gym environment in a `MyWrapper` class that normalises the `step` return signature and enforces an episode length limit.
+
+```python
+import gym
+
+class MyWrapper(gym.Wrapper):
+
+    def __init__(self):
+        env = gym.make('CartPole-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
+
+CartPole-v1 has a 4-dimensional state (position, velocity, angle, angular velocity) and 2 discrete actions (push left / push right).
+
+## Key Concepts
+
+<Steps>
+  <Step title="Q-Network">
+    A neural network maps state → Q-values for every action. The agent picks the action with the highest Q-value (greedy), or explores randomly with probability ε (epsilon-greedy).
+  </Step>
+  <Step title="Experience Replay">
+    Transitions `(s, a, r, s', done)` are stored in a replay buffer. At each training step a random mini-batch is drawn from this buffer, breaking harmful temporal correlations.
+  </Step>
+  <Step title="Target Network">
+    A second network with frozen weights provides the TD targets. Its weights are periodically hard-copied from the online network, preventing the "chasing a moving target" instability.
+  </Step>
+  <Step title="TD Update">
+    The loss is `MSE(Q(s,a), r + γ·max_a' Q_target(s',a'))`. Minimising this loss nudges the online network toward the Bellman optimality equation.
+  </Step>
+</Steps>
+
+## Single-Model DQN (Baseline)
+
+The simplest variant uses **one network for both action selection and target computation**.
+
+### Network Architecture
+
+```python
+import torch
+
+# Q-network: state (4) → hidden (128) → Q-values (2)
+model = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+```
+
+### Epsilon-Greedy Action Selection
+
+```python
+import random
+
+def get_action(state):
+    if random.random() < 0.01:
+        return random.choice([0, 1])
+
+    # Forward pass through the network
+    state = torch.FloatTensor(state).reshape(1, 4)
+    return model(state).argmax().item()
+```
+
+<Note>
+The exploration rate here is a fixed 1 %. In practice you would anneal ε from a high value (e.g. 1.0) down to a small floor during training.
+</Note>
+
+### Experience Replay Buffer
+
+```python
+# Replay buffer
+datas = []
+
+def update_data():
+    old_count = len(datas)
+
+    # Collect at least 200 new transitions
+    while len(datas) - old_count < 200:
+        state = env.reset()
+        over = False
+        while not over:
+            action = get_action(state)
+            next_state, reward, over, _ = env.step(action)
+            datas.append((state, action, reward, next_state, over))
+            state = next_state
+
+    # Evict oldest samples beyond the 10 000 cap
+    while len(datas) > 10000:
+        datas.pop(0)
+```
+
+### Sampling a Mini-Batch
+
+```python
+def get_sample():
+    samples = random.sample(datas, 64)
+
+    state      = torch.FloatTensor([i[0] for i in samples])   # [b, 4]
+    action     = torch.LongTensor( [i[1] for i in samples])   # [b]
+    reward     = torch.FloatTensor([i[2] for i in samples])   # [b]
+    next_state = torch.FloatTensor([i[3] for i in samples])   # [b, 4]
+    over       = torch.LongTensor( [i[4] for i in samples])   # [b]
+
+    return state, action, reward, next_state, over
+```
+
+### Computing Q-Values and TD Targets
+
+```python
+def get_value(state, action):
+    # [b, 4] → [b, 2] → [b]
+    value = model(state)
+    value = value[range(64), action]
+    return value
+
+def get_target(reward, next_state, over):
+    with torch.no_grad():
+        target = model(next_state)          # [b, 4] → [b, 2]
+
+    target = target.max(dim=1)[0]           # [b]
+
+    # Zero out terminal states
+    for i in range(64):
+        if over[i]:
+            target[i] = 0
+
+    target *= 0.98      # discount factor γ
+    target += reward
+    return target
+```
+
+### Training Loop
+
+```python
+from IPython import display
+
+def train():
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
+    loss_fn   = torch.nn.MSELoss()
+
+    for epoch in range(500):
+        update_count, drop_count = update_data()
+
+        for i in range(200):
+            state, action, reward, next_state, over = get_sample()
+
+            value  = get_value(state, action)
+            target = get_target(reward, next_state, over)
+
+            loss = loss_fn(value, target)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        if epoch % 50 == 0:
+            print(epoch, len(datas), update_count, drop_count,
+                  sum([test(play=False) for _ in range(20)]) / 20)
+
+train()
+```
+
+## Dual-Model DQN (Target Network)
+
+The dual-model variant adds a **target network** (`next_model`) whose weights are periodically synchronised from the online network. This decouples the target computation from the learning weights and significantly stabilises training.
+
+```python
+import torch
+
+# Online network
+model = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+
+# Target network – initialised as a copy of model
+next_model = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+)
+next_model.load_state_dict(model.state_dict())
+```
+
+The only change to `get_target` is that it now uses `next_model` instead of `model`:
+
+```python
+def get_target(reward, next_state, over):
+    with torch.no_grad():
+        target = next_model(next_state)     # frozen weights
+
+    target = target.max(dim=1)[0]
+    target = target.reshape(-1, 1)
+
+    target *= 0.98
+    target *= (1 - over)
+    target += reward
+    return target
+```
+
+During training the target network is refreshed every 10 inner steps:
+
+```python
+# Inside the inner training loop
+if (i + 1) % 10 == 0:
+    next_model.load_state_dict(model.state_dict())
+```
+
+## Double DQN
+
+Vanilla DQN tends to **overestimate** Q-values because the same network both selects and evaluates actions. Double DQN decouples these two decisions:
+
+- **Action selection** → online network (`model`)
+- **Action evaluation** → target network (`next_model`)
+
+```python
+def get_target(reward, next_state, over):
+    with torch.no_grad():
+        target = next_model(next_state)     # [b, 3] → [b, 11]
+
+    # Standard DQN (commented out):
+    # target = target.max(dim=1)[0]
+
+    # Double DQN: use online net to select the best action
+    with torch.no_grad():
+        model_target = model(next_state)    # [b, 3] → [b, 11]
+
+    # Index into target-net values with actions chosen by online net
+    best_actions = model_target.argmax(dim=1)
+    target = target[range(len(target)), best_actions]
+
+    target = target.reshape(-1, 1)
+    target *= 0.98
+    target *= (1 - over)
+    target += reward
+    return target
+```
+
+The target network is synchronised less frequently (every 50 steps) to give it time to stabilise:
+
+```python
+if (i + 1) % 50 == 0:
+    next_model.load_state_dict(model.state_dict())
+```
+
+## Dueling DQN
+
+Dueling DQN factorises the Q-value into a **state-value stream V(s)** and an **advantage stream A(s, a)** via a custom network architecture. This helps the network learn the baseline value of a state independently of which action is taken.
+
+```python
+import torch
+
+class VAnet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        # Shared feature extractor
+        self.fc = torch.nn.Sequential(
+            torch.nn.Linear(3, 128),
+            torch.nn.ReLU(),
+        )
+
+        self.fc_A = torch.nn.Linear(128, 11)   # Advantage stream
+        self.fc_V = torch.nn.Linear(128, 1)    # Value stream
+
+    def forward(self, x):
+        A = self.fc_A(self.fc(x))              # [b, 11]
+        V = self.fc_V(self.fc(x))              # [b, 1]
+
+        A_mean = A.mean(dim=1).reshape(-1, 1)  # [b, 1]
+        A -= A_mean                            # centre advantages
+
+        # Q = V + (A - mean(A))
+        return V + A
+```
+
+```python
+# Online and target networks share the same VAnet architecture
+model      = VAnet()
+next_model = VAnet()
+next_model.load_state_dict(model.state_dict())
+```
+
+<Tip>
+Subtracting the mean advantage (`A -= A_mean`) ensures identifiability: without this trick V and A are not uniquely recoverable from Q.
+</Tip>
+
+## Comparison
+
+| Variant | Key Difference | Benefit |
+|---------|---------------|---------|
+| DQN (single model) | One network for selection and evaluation | Simple baseline |
+| DQN (dual model) | Frozen target network | Stable TD targets |
+| Double DQN | Online net selects, target net evaluates | Reduces overestimation |
+| Dueling DQN | Separate V and A streams | Better state-value estimation |
+
+<Warning>
+All examples here use a **hard copy** of weights into the target network. Production implementations often prefer a **soft update** (`θ_target ← τ θ + (1-τ) θ_target` with small τ) as used in DDPG and SAC.
+</Warning>

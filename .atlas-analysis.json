@@ -1,0 +1,98 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Simple Reinforcement Learning",
+  "projectDescription": "A Chinese-language educational series of Jupyter notebooks implementing core reinforcement learning algorithms from scratch, progressing from stateless bandit problems through deep RL methods like DQN, PPO, DDPG, SAC, and multi-agent systems.",
+  "theme": "palm",
+  "primaryColor": "#1eaee4",
+  "lightColor": "#6dc9ee",
+  "darkColor": "#244ca5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "setup"
+            ]
+          },
+          {
+            "group": "Foundations",
+            "pages": [
+              "foundations/gym-environment",
+              "foundations/stateless-bandits",
+              "foundations/markov-decision-process",
+              "foundations/dynamic-programming"
+            ]
+          },
+          {
+            "group": "Tabular & Model-Based Methods",
+            "pages": [
+              "methods/temporal-difference",
+              "methods/dynaq"
+            ]
+          },
+          {
+            "group": "Deep RL Algorithms",
+            "pages": [
+              "algorithms/dqn",
+              "algorithms/policy-gradient",
+              "algorithms/actor-critic",
+              "algorithms/ppo",
+              "algorithms/ddpg",
+              "algorithms/sac"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/imitation-learning",
+              "advanced/offline-rl",
+              "advanced/mpc",
+              "advanced/mbpo",
+              "advanced/goal-conditioned-rl",
+              "advanced/multi-agent"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Step-by-step Jupyter notebook implementations of 18 RL topics",
+    "Stateless bandit algorithms: Greedy, Decaying Greedy, UCB, Thompson Sampling",
+    "Markov Decision Process foundations: Monte Carlo and Bellman Equation",
+    "Dynamic programming: Policy Iteration and Value Iteration",
+    "Temporal-Difference learning: Sarsa, N-step Sarsa, Q-Learning",
+    "Model-based planning with DynaQ",
+    "Deep Q-Network (DQN) with variants: Double DQN, Dueling DQN",
+    "Policy Gradient methods: REINFORCE, Actor-Critic, PPO, TRPO",
+    "Continuous-action algorithms: DDPG, SAC",
+    "Advanced topics: Imitation Learning, Offline RL, MPC, MBPO, Goal-conditioned RL, Multi-agent",
+    "OpenAI Gym integration with CartPole and Pendulum environments",
+    "Custom multi-agent combat environment",
+    "Compatible with Python 3.9, PyTorch 1.12.1, Gym 0.26.2"
+  ],
+  "publicApiSurface": [
+    "1.无状态问题 — Greedy, Decaying Greedy, UCB, Thompson Sampling bandit algorithms",
+    "2.马尔可夫决策过程 — Monte Carlo method, Bellman equation matrix solver",
+    "3.动态规划算法 — Policy Iteration, Value Iteration, FrozenLake demo",
+    "4.时序差分算法 — Sarsa, N-step Sarsa, Q-Learning",
+    "5.DynaQ算法 — DynaQ model-based planning",
+    "6.DQN算法 — Single-model DQN, Dual-model DQN (CartPole/Pendulum), Double DQN, Dueling DQN",
+    "7.策略梯度算法 — REINFORCE",
+    "8.Actor_Critic算法 — Actor-Critic",
+    "10.PPO算法 — PPO (CartPole, Pendulum)",
+    "11.DDPG算法 — DDPG",
+    "12.SAC算法 — SAC (Pendulum, CartPole)",
+    "13.模仿学习 — Imitation Learning (CartPole, Pendulum)",
+    "14.离线学习 — Offline RL",
+    "15.MPC — Model Predictive Control",
+    "16.MBPO — Model-Based Policy Optimization",
+    "17.目标导向的强化学习 — Goal-conditioned RL",
+    "18.多智能体 — Multi-agent (custom Combat environment)",
+    "x1.gym — OpenAI Gym setup and environment walkthrough"
+  ]
+}

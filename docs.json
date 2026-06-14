@@ -1,72 +1,76 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Simple Reinforcement Learning",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#1eaee4",
+    "light": "#6dc9ee",
+    "dark": "#244ca5"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/878ba9a7-6c65-4697-82ea-bf611fec68eb.png",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/lansinuote/Simple_Reinforcement_Learning"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/lansinuote/Simple_Reinforcement_Learning"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "setup"
+            ]
+          },
+          {
+            "group": "Foundations",
+            "pages": [
+              "foundations/gym-environment",
+              "foundations/stateless-bandits",
+              "foundations/markov-decision-process",
+              "foundations/dynamic-programming"
+            ]
+          },
+          {
+            "group": "Tabular & Model-Based Methods",
+            "pages": [
+              "methods/temporal-difference",
+              "methods/dynaq"
+            ]
+          },
+          {
+            "group": "Deep RL Algorithms",
+            "pages": [
+              "algorithms/dqn",
+              "algorithms/policy-gradient",
+              "algorithms/actor-critic",
+              "algorithms/ppo",
+              "algorithms/ddpg",
+              "algorithms/sac"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/imitation-learning",
+              "advanced/offline-rl",
+              "advanced/mpc",
+              "advanced/mbpo",
+              "advanced/goal-conditioned-rl",
+              "advanced/multi-agent"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

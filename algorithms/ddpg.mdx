@@ -1,0 +1,294 @@
+---
+title: "DDPG: Deep Deterministic Policy Gradient for Continuous Actions"
+sidebarTitle: "DDPG"
+description: "Implement DDPG — an off-policy actor-critic algorithm for continuous action spaces — using target networks, experience replay, and Ornstein-Uhlenbeck noise."
+---
+
+DQN works beautifully for environments with a small, discrete action space, but it cannot handle **continuous actions** such as the torque applied to a pendulum. The naive extension — discretising the action space — grows exponentially with the number of action dimensions. **Deep Deterministic Policy Gradient (DDPG)** solves this by combining ideas from DQN (experience replay, target networks) with a **deterministic actor** that directly maps states to continuous actions. The critic evaluates `Q(s, a)` for the actor's chosen action, and the actor is updated by ascending the Q gradient.
+
+## How DDPG Works
+
+<Steps>
+  <Step title="Deterministic actor">
+    The actor `μ(s; θ)` directly outputs a continuous action — no sampling required. During training, Gaussian noise is added to encourage exploration.
+  </Step>
+  <Step title="Critic Q(s, a)">
+    The critic concatenates `[s, a]` and outputs a scalar Q-value. It is trained with the Bellman equation: `Q(s,a) ← r + γ Q_target(s', μ_target(s'))`.
+  </Step>
+  <Step title="Target networks">
+    Both actor and critic have frozen target copies. They are updated with a **soft update**: `θ_target ← (1-τ) θ_target + τ θ` with τ=0.005, producing a slowly-moving target.
+  </Step>
+  <Step title="Experience replay">
+    Transitions are stored in a buffer and sampled randomly, providing decorrelated training data — the same mechanism as DQN.
+  </Step>
+  <Step title="Actor update">
+    Gradient of the actor loss: `-∂Q(s, μ(s)) / ∂θ`. Minimising the negated mean Q-value steers the actor toward high-reward actions.
+  </Step>
+</Steps>
+
+## Environment (Pendulum-v1)
+
+Pendulum-v1 has a 3-dimensional state and a 1-dimensional continuous action in `[-2, 2]`.
+
+```python
+import gym
+
+class MyWrapper(gym.Wrapper):
+
+    def __init__(self):
+        env = gym.make('Pendulum-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
+
+## Networks
+
+DDPG maintains **four** networks in total: an online actor, a target actor, an online critic, and a target critic.
+
+### Actor Network
+
+The actor outputs a deterministic continuous action in `[-2, 2]` via `Tanh` scaled by 2.
+
+```python
+import torch
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.sequential = torch.nn.Sequential(
+            torch.nn.Linear(3, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 1),
+            torch.nn.Tanh(),
+        )
+
+    def forward(self, state):
+        return self.sequential(state) * 2.0    # scale to [-2, 2]
+
+
+# Online and target actor networks
+model_action      = Model()
+model_action_next = Model()
+model_action_next.load_state_dict(model_action.state_dict())
+
+model_action(torch.randn(1, 3))
+```
+
+### Critic Network
+
+The critic takes the concatenation `[state, action]` as input and outputs a scalar Q-value.
+
+```python
+# Critic: [state (3) + action (1)] → Q-value (1)
+model_value = torch.nn.Sequential(
+    torch.nn.Linear(4, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 1),
+)
+
+# Target critic — initialised as a copy
+model_value_next = torch.nn.Sequential(
+    torch.nn.Linear(4, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 1),
+)
+model_value_next.load_state_dict(model_value.state_dict())
+
+model_value(torch.randn(1, 4))
+```
+
+## Action Selection with Exploration Noise
+
+The actor is deterministic, so exploration requires explicitly added noise. A simple Gaussian perturbation is sufficient for many environments.
+
+```python
+import random
+import numpy as np
+
+def get_action(state):
+    state  = torch.FloatTensor(state).reshape(1, 3)
+    action = model_action(state).item()
+
+    # Gaussian exploration noise
+    action += random.normalvariate(mu=0, sigma=0.01)
+    return action
+
+
+get_action([1, 2, 3])
+```
+
+<Note>
+Some implementations use **Ornstein-Uhlenbeck (OU) noise** instead of i.i.d. Gaussian noise. OU noise is temporally correlated, producing smoother exploration trajectories that can be beneficial in physical simulation environments.
+</Note>
+
+## Experience Replay Buffer
+
+```python
+# Replay buffer (capacity 10 000)
+datas = []
+
+def update_data():
+    state = env.reset()
+    over  = False
+
+    while not over:
+        action = get_action(state)
+        next_state, reward, over, _ = env.step([action])
+
+        datas.append((state, action, reward, next_state, over))
+        state = next_state
+
+    # Evict oldest samples beyond capacity
+    while len(datas) > 10000:
+        datas.pop(0)
+```
+
+## Sampling and Computing Targets
+
+```python
+def get_sample():
+    samples = random.sample(datas, 64)
+
+    state      = torch.FloatTensor([i[0] for i in samples]).reshape(-1, 3)
+    action     = torch.FloatTensor([i[1] for i in samples]).reshape(-1, 1)
+    reward     = torch.FloatTensor([i[2] for i in samples]).reshape(-1, 1)
+    next_state = torch.FloatTensor([i[3] for i in samples]).reshape(-1, 3)
+    over       = torch.LongTensor( [i[4] for i in samples]).reshape(-1, 1)
+
+    return state, action, reward, next_state, over
+
+
+def get_value(state, action):
+    # Concatenate state and action for the critic
+    input = torch.cat([state, action], dim=1)   # [b, 4]
+    return model_value(input)                   # [b, 1]
+
+
+def get_target(next_state, reward, over):
+    # Target actor selects the next action
+    action = model_action_next(next_state)      # [b, 1]
+
+    # Target critic evaluates Q(s', μ_target(s'))
+    input  = torch.cat([next_state, action], dim=1)
+    target = model_value_next(input) * 0.98
+
+    target *= (1 - over)
+    target += reward
+    return target
+```
+
+## Soft Target Update
+
+```python
+def soft_update(model, model_next):
+    for param, param_next in zip(model.parameters(), model_next.parameters()):
+        # θ_target ← 0.995 · θ_target + 0.005 · θ
+        value = param_next.data * 0.995 + param.data * 0.005
+        param_next.data.copy_(value)
+
+
+# Test with a dummy module
+soft_update(torch.nn.Linear(4, 64), torch.nn.Linear(4, 64))
+```
+
+The soft update coefficient τ=0.005 means target weights change by only 0.5 % each step, providing very stable regression targets.
+
+## Actor Loss
+
+The actor is updated by maximising `Q(s, μ(s))` — equivalently minimising the negated mean Q-value.
+
+```python
+def get_loss_action(state):
+    # Compute actions from the online actor
+    action = model_action(state)             # [b, 1]
+
+    # Concatenate and evaluate with the online critic
+    input  = torch.cat([state, action], dim=1)
+
+    # Negative because we want to maximise Q (we minimise loss)
+    loss   = -model_value(input).mean()
+
+    return loss
+```
+
+## Training Loop
+
+```python
+def train():
+    model_action.train()
+    model_value.train()
+    optimizer_action = torch.optim.Adam(model_action.parameters(), lr=5e-4)
+    optimizer_value  = torch.optim.Adam(model_value.parameters(),  lr=5e-3)
+    loss_fn          = torch.nn.MSELoss()
+
+    for epoch in range(200):
+        update_data()
+
+        for i in range(200):
+            state, action, reward, next_state, over = get_sample()
+
+            # ── Critic update ─────────────────────────────────────────
+            value  = get_value(state, action)
+            target = get_target(next_state, reward, over)
+
+            loss_value = loss_fn(value, target.detach())
+
+            optimizer_value.zero_grad()
+            loss_value.backward()
+            optimizer_value.step()
+
+            # ── Actor update ──────────────────────────────────────────
+            loss_action = get_loss_action(state)
+
+            optimizer_action.zero_grad()
+            loss_action.backward()
+            optimizer_action.step()
+
+            # ── Soft update of target networks ────────────────────────
+            soft_update(model_action, model_action_next)
+            soft_update(model_value,  model_value_next)
+
+        if epoch % 20 == 0:
+            print(epoch, len(datas),
+                  sum([test(play=False) for _ in range(3)]) / 3)
+
+train()
+```
+
+## DDPG vs DQN
+
+| Aspect | DQN | DDPG |
+|--------|-----|------|
+| Action space | Discrete | Continuous |
+| Policy | ε-greedy over Q | Deterministic actor `μ(s)` |
+| Critic input | State only | State + Action concatenated |
+| Exploration | ε-greedy randomness | Noise added to actor output |
+| Target update | Periodic hard copy | Soft update every step |
+
+<Warning>
+DDPG is sensitive to hyperparameter choices, especially the noise scale, learning rates, and replay buffer size. If the actor or critic diverges early in training, try reducing the learning rates or increasing the buffer before collecting the first training batch.
+</Warning>

@@ -1,0 +1,62 @@
+---
+title: "Simple Reinforcement Learning: Course Introduction"
+sidebarTitle: "Introduction"
+description: "An overview of the Simple Reinforcement Learning notebook series — 18 algorithms from multi-armed bandits to multi-agent systems, all built from scratch."
+---
+
+Reinforcement learning (RL) is the branch of machine learning where an agent learns to make decisions by interacting with an environment, collecting rewards, and gradually improving its strategy over time. Unlike supervised learning, there are no labelled examples — the agent discovers what works through trial and error. This makes RL the foundation behind breakthroughs such as AlphaGo, robotic control, and large language model fine-tuning. The **Simple Reinforcement Learning** series was created to make these ideas accessible: every concept is implemented from scratch in a self-contained Jupyter notebook, so you can read the theory, run the code, and watch the agent improve — all in one place.
+
+## What This Course Covers
+
+The series is organised as 18 numbered topics that build on each other progressively. You start with the simplest possible problem — choosing between slot machines — and finish with agents that must cooperate or compete with each other. Every notebook is written in plain Python using PyTorch for the neural-network layers, and OpenAI Gym for the simulation environments. The two environments you will encounter most often are **CartPole-v1** (balance a pole on a moving cart, a classic discrete-action benchmark) and **Pendulum-v1** (swing a pendulum upright, a continuous-action benchmark).
+
+<Note>
+  All notebooks were validated against **Python 3.9**, **PyTorch 1.12.1**, and **Gym 0.26.2**. Using different versions may produce API mismatches. See the [Setup guide](/setup) for exact installation instructions.
+</Note>
+
+## Tech Stack
+
+| Component | Version |
+|-----------|---------|
+| Python    | 3.9     |
+| PyTorch   | 1.12.1  |
+| Gym       | 0.26.2  |
+
+## Course Structure
+
+The 18 notebooks are stored in numbered folders inside the repository. The table below groups them into four natural phases of the curriculum.
+
+<CardGroup cols={2}>
+  <Card title="Foundations" icon="seedling">
+    **Notebooks 1–4** — Multi-armed bandits, Markov Decision Processes, dynamic programming, and Monte Carlo methods. You learn how value functions and policies are defined before any neural network is involved.
+  </Card>
+  <Card title="Classic Control" icon="sliders">
+    **Notebooks 5–9** — Temporal-difference learning, Q-learning, SARSA, and the first deep networks: DQN and its Double / Dueling / Priority-Replay variants. CartPole-v1 is solved for the first time here.
+  </Card>
+  <Card title="Policy Gradient Methods" icon="chart-line">
+    **Notebooks 10–14** — REINFORCE, Actor-Critic (A2C), Proximal Policy Optimization (PPO), and Soft Actor-Critic (SAC). Pendulum-v1 is introduced as the continuous-action testbed.
+  </Card>
+  <Card title="Advanced Topics" icon="network-wired">
+    **Notebooks 15–18** — Distributional RL, model-based planning, imitation learning, and multi-agent systems. These chapters connect the fundamentals to modern research directions.
+  </Card>
+</CardGroup>
+
+## Why Build From Scratch?
+
+Many RL libraries hide the interesting parts behind high-level APIs. This course takes the opposite approach: every update rule, every replay buffer, and every neural-network architecture is written out explicitly so you can see exactly what is happening at each step. The goal is not just to run a pre-built agent, but to understand the mechanics well enough to modify them, debug them, and apply them to new problems.
+
+<Tip>
+  If you prefer to watch before you read, the full companion video course is available on Bilibili. The videos walk through each notebook step by step and are a great complement to the written explanations.
+
+  [Watch on Bilibili →](https://www.bilibili.com/video/BV1Ge4y1i7L6/)
+</Tip>
+
+## Repository
+
+All source notebooks, utility scripts, and saved checkpoints live in the GitHub repository. You can browse the numbered folders to jump directly to a topic, or clone the whole repository locally and run everything in Jupyter.
+
+[View on GitHub →](https://github.com/lansinuote/Simple_Reinforcement_Learning)
+
+## Next Steps
+
+Once you are familiar with what the course covers, head to the [Setup guide](/setup) to create your Python environment and install the exact package versions needed to run every notebook without errors.

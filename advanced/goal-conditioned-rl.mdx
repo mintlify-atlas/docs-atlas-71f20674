@@ -1,0 +1,282 @@
+---
+title: "Goal-Conditioned RL: Hindsight Experience Replay"
+sidebarTitle: "Goal-Conditioned RL"
+description: "Implement goal-conditioned reinforcement learning with Hindsight Experience Replay (HER) — train agents to reach specified goals by relabeling failed trajectories."
+---
+
+Goal-conditioned reinforcement learning trains an agent to reach a variety of specified goals rather than maximizing a single fixed reward. The policy receives both the current state and the goal as input: `π(a | s, g)`. This generalization makes the agent far more flexible — once trained, it can be directed toward any reachable goal in the environment.
+
+The main challenge is **sparse rewards**: the agent only receives a reward when it reaches the goal, making it extremely hard to learn from failures alone. **Hindsight Experience Replay (HER)** solves this by relabeling failed episodes: if the agent ended up at state `s'` without reaching the intended goal `g`, HER pretends that `s'` *was* the goal and recomputes the reward accordingly. This turns every failed episode into a successful one for a different goal, providing a dense source of learning signal.
+
+---
+
+## Key Concepts
+
+<Note>
+In HER, 80% of sampled transitions are relabeled with a "hindsight goal" drawn from a later state in the same episode. The remaining 20% use the original goal. This ratio encourages the agent to generalize across many sub-goals while still learning to reach the intended goal.
+</Note>
+
+## Environment
+
+A custom 2-D navigation environment is used. The agent's position occupies the first two components of the state, and the goal occupies the last two:
+
+```python
+import torch
+import random
+
+random.seed(0)
+torch.manual_seed(0)
+
+class Env:
+    def reset(self):
+        # State: [x, y, goal_x, goal_y]
+        self.state = torch.zeros(4)
+        self.state[2] = random.uniform(3.5, 4.5)
+        self.state[3] = random.uniform(3.5, 4.5)
+        self.count = 0
+        return self.state.tolist()
+
+    def step(self, action):
+        action = torch.FloatTensor(action).reshape(2)
+        action = torch.clamp(action, min=-1, max=1)
+
+        self.state[:2] += action
+        self.state[:2] = torch.clamp(self.state[:2], min=0, max=5)
+        self.count += 1
+
+        # L2 distance from current position to goal
+        mod = (self.state[:2] - self.state[2:]).norm(p=2).item()
+
+        reward = -1.0
+        over   = False
+        if mod <= 0.15:
+            reward = 0.0
+            over   = True
+
+        if self.count >= 50:
+            over = True
+
+        return self.state.tolist(), reward, over
+
+env = Env()
+print(env.reset())        # [0.0, 0.0, 4.34, 4.26]
+print(env.step([0.1, 0.2]))  # ([0.1, 0.2, 4.34, 4.26], -1.0, False)
+```
+
+## Policy — DDPG
+
+A deterministic policy gradient (DDPG) agent learns to map `(state, goal)` pairs to continuous 2-D actions. Both the actor and critic receive the full 4-dimensional state (which already encodes the goal in its last two components):
+
+```python
+class DDPG:
+    def __init__(self):
+        self.model_action = torch.nn.Sequential(
+            torch.nn.Linear(4, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 2),
+            torch.nn.Tanh(),
+        )
+        self.model_value = torch.nn.Sequential(
+            torch.nn.Linear(6, 128), torch.nn.ReLU(),   # state(4) + action(2)
+            torch.nn.Linear(128, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 1),
+        )
+        self.model_action_next = torch.nn.Sequential(
+            torch.nn.Linear(4, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 2),
+            torch.nn.Tanh(),
+        )
+        self.model_value_next = torch.nn.Sequential(
+            torch.nn.Linear(6, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 128), torch.nn.ReLU(),
+            torch.nn.Linear(128, 1),
+        )
+        self.model_action_next.load_state_dict(self.model_action.state_dict())
+        self.model_value_next.load_state_dict(self.model_value.state_dict())
+
+        self.optimizer_action = torch.optim.Adam(self.model_action.parameters(), lr=1e-3)
+        self.optimizer_value  = torch.optim.Adam(self.model_value.parameters(),  lr=1e-3)
+        self.mse_loss = torch.nn.MSELoss()
+
+    def get_action(self, state):
+        state  = torch.FloatTensor(state).reshape(1, 4)
+        action = self.model_action(state).reshape(2)
+        action += 0.1 * torch.randn(2)   # exploration noise
+        return action.tolist()
+
+    def _soft_update(self, model, model_next):
+        for param, param_next in zip(model.parameters(), model_next.parameters()):
+            param_next.data.copy_(param_next.data * 0.995 + param.data * 0.005)
+
+    def train(self, state, action, reward, next_state, over):
+        target = self.model_action_next(next_state)
+        target = self.model_value_next(torch.cat([next_state, target], dim=1))
+        target = target * 0.98 * (1 - over) + reward
+
+        value     = self.model_value(torch.cat([state, action], dim=1))
+        loss_value = self.mse_loss(value, target)
+        self.optimizer_value.zero_grad()
+        loss_value.backward()
+        self.optimizer_value.step()
+
+        loss_action = -self.model_value(
+            torch.cat([state, self.model_action(state)], dim=1)
+        ).mean()
+        self.optimizer_action.zero_grad()
+        loss_action.backward()
+        self.optimizer_action.step()
+
+        self._soft_update(self.model_action, self.model_action_next)
+        self._soft_update(self.model_value,  self.model_value_next)
+
+ddpg = DDPG()
+```
+
+## Data Collection with HER Relabeling
+
+The `Data` class stores full episodes and performs hindsight relabeling at sampling time. For each drawn transition, with probability 0.8 a future state from the same episode is used as a fake goal, and reward/done are recomputed:
+
+```python
+class Data:
+    def __init__(self):
+        self.datas = []
+
+    def __len__(self):
+        return len(self.datas)
+
+    def update(self):
+        state = env.reset()
+        over  = False
+        data  = {'state': [], 'action': [], 'reward': [], 'next_state': [], 'over': []}
+
+        while not over:
+            action = ddpg.get_action(state)
+            next_state, reward, over = env.step(action)
+
+            data['state'].append(state)
+            data['action'].append(action)
+            data['reward'].append(reward)
+            data['next_state'].append(next_state)
+            data['over'].append(over)
+            state = next_state
+
+        self.datas.append(data)
+
+    def get_sample(self):
+        sample = {'state': [], 'action': [], 'reward': [], 'next_state': [], 'over': []}
+
+        for _ in range(256):
+            # Pick a random episode and a random (non-terminal) step
+            data = random.sample(self.datas, 1)[0]
+            step = random.randint(0, len(data['action']) - 2)
+
+            state      = data['state'][step]
+            next_state = data['next_state'][step]
+            action     = data['action'][step]
+            reward     = data['reward'][step]
+            over       = data['over'][step]
+
+            # Hindsight Experience Replay: 80% of transitions use a fake goal
+            if random.random() <= 0.8:
+                # Choose a future state as the fake goal
+                future_step = random.randint(step + 1, len(data['action']) - 1)
+                fake_goal   = data['state'][future_step][:2]
+
+                # Recompute reward and done for the fake goal
+                mod = torch.FloatTensor([
+                    next_state[0] - fake_goal[0],
+                    next_state[1] - fake_goal[1],
+                ]).norm(p=2).item()
+
+                reward = -1.0
+                over   = False
+                if mod <= 0.15:
+                    reward = 0.0
+                    over   = True
+
+                # Replace the goal coordinates in state and next_state
+                state[2]      = fake_goal[0]
+                state[3]      = fake_goal[1]
+                next_state[2] = fake_goal[0]
+                next_state[3] = fake_goal[1]
+
+            sample['state'].append(state)
+            sample['action'].append(action)
+            sample['reward'].append(reward)
+            sample['next_state'].append(next_state)
+            sample['over'].append(over)
+
+        sample['state']      = torch.FloatTensor(sample['state']).reshape(-1, 4)
+        sample['action']     = torch.FloatTensor(sample['action']).reshape(-1, 2)
+        sample['reward']     = torch.FloatTensor(sample['reward']).reshape(-1, 1)
+        sample['next_state'] = torch.FloatTensor(sample['next_state']).reshape(-1, 4)
+        sample['over']       = torch.LongTensor(sample['over']).reshape(-1, 1)
+        return sample
+
+    def get_last_reward_mean(self):
+        reward_sum = [sum(d['reward']) for d in self.datas[-10:]]
+        return sum(reward_sum) / len(reward_sum)
+```
+
+## Training Loop
+
+Initialize the dataset with 200 random episodes, then alternate between collecting new episodes and training the policy:
+
+```python
+data = Data()
+
+# Warm-start: collect 200 initial episodes
+for _ in range(200):
+    data.update()
+
+# Main training loop
+for i in range(1800):
+    data.update()
+
+    for _ in range(20):
+        ddpg.train(**data.get_sample())
+
+    if i % 100 == 0:
+        print(i, len(data), data.get_last_reward_mean())
+```
+
+Sample output:
+
+```
+0    201  -50.0
+100  301  -45.3
+400  601  -23.1
+500  701   -4.6
+600  801   -4.2
+900 1101   -3.9
+```
+
+<Tip>
+The average reward quickly jumps from −50 (never reaching the goal in 50 steps) to around −4 (reaching the goal in roughly 4 steps). Without HER, the sparse reward signal would make learning nearly impossible.
+</Tip>
+
+---
+
+## How HER Works — Step by Step
+
+<Steps>
+  <Step title="Collect episode with original goal g">
+    The agent starts at position `(0, 0)` and tries to reach goal `g ≈ (4, 4)`. It usually fails, collecting transitions with `reward = -1`.
+  </Step>
+  <Step title="Identify the achieved state s'">
+    At the end of the episode, the agent has reached some state `s'`. Even though `s'` is not the original goal, it *is* a valid goal position.
+  </Step>
+  <Step title="Relabel with hindsight goal g' = s'[:2]">
+    For each transition `(s, a, r, s')` in the episode, replace the goal in the state representation with `s'[:2]`. Recompute whether the new goal was reached.
+  </Step>
+  <Step title="Add relabeled transitions to the replay buffer">
+    The agent now has training data for the goal it actually reached, providing a positive reward signal even from a failed episode.
+  </Step>
+</Steps>
+
+## Limitations
+
+<Warning>
+HER assumes that the goal space coincides with (a subset of) the state space — i.e., every reachable state can serve as a valid goal. If the goal is abstract or the achieved state does not constitute a meaningful goal, relabeling may produce misleading training data.
+</Warning>

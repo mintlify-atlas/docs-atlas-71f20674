@@ -1,0 +1,366 @@
+---
+title: "Proximal Policy Optimization (PPO) for Stable Training"
+sidebarTitle: "PPO"
+description: "Implement PPO — a clipped policy gradient algorithm — on CartPole and Pendulum environments using PyTorch, with separate actor and critic networks."
+---
+
+Actor-Critic produces good policies, but vanilla policy gradient methods suffer from a fundamental instability: a single bad update can drastically change the policy, collapsing performance in a way that is hard to recover from. **Proximal Policy Optimization (PPO)** solves this with a **clipped surrogate objective** that limits how much the policy is allowed to change in any single update. By reusing each batch of data for multiple gradient steps — while keeping updates within a trust region — PPO achieves much better sample efficiency and training stability than REINFORCE or standard Actor-Critic.
+
+## Core Idea: Clipped Surrogate Objective
+
+Define the **probability ratio**:
+
+```
+r_t(θ) = π(a_t|s_t; θ) / π(a_t|s_t; θ_old)
+```
+
+PPO maximises a clipped version of the policy gradient:
+
+```
+L_CLIP = E_t [ min( r_t · A_t,  clip(r_t, 1-ε, 1+ε) · A_t ) ]
+```
+
+The clipping constrains the ratio to `[1-ε, 1+ε]` (typically ε=0.2), preventing any single update from pushing the policy too far.
+
+## Environment Setup
+
+<Tabs>
+  <Tab title="CartPole (Discrete)">
+    ```python
+    import gym
+
+    class MyWrapper(gym.Wrapper):
+
+        def __init__(self):
+            env = gym.make('CartPole-v1', render_mode='rgb_array')
+            super().__init__(env)
+            self.env = env
+            self.step_n = 0
+
+        def reset(self):
+            state, _ = self.env.reset()
+            self.step_n = 0
+            return state
+
+        def step(self, action):
+            state, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
+            self.step_n += 1
+            if self.step_n >= 200:
+                done = True
+            return state, reward, done, info
+
+
+    env = MyWrapper()
+    env.reset()
+    ```
+  </Tab>
+  <Tab title="Pendulum (Continuous)">
+    ```python
+    import gym
+
+    class MyWrapper(gym.Wrapper):
+        def __init__(self):
+            env = gym.make('Pendulum-v1', render_mode='rgb_array')
+            super().__init__(env)
+            self.env = env
+            self.step_n = 0
+
+        def reset(self):
+            state, _ = self.env.reset()
+            self.step_n = 0
+            return state
+
+        def step(self, action):
+            state, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
+            self.step_n += 1
+            if self.step_n >= 200:
+                done = True
+            return state, reward, done, info
+
+
+    env = MyWrapper()
+    env.reset()
+    ```
+  </Tab>
+</Tabs>
+
+## Networks
+
+<Tabs>
+  <Tab title="CartPole (Discrete Actions)">
+    The actor uses a **Softmax** output to produce a categorical distribution over the two discrete actions.
+
+    ```python
+    import torch
+
+    # Actor: state (4) → action probabilities (2)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(4, 128),
+        torch.nn.ReLU(),
+        torch.nn.Linear(128, 2),
+        torch.nn.Softmax(dim=1),
+    )
+
+    # Critic: state (4) → scalar V(s)
+    model_td = torch.nn.Sequential(
+        torch.nn.Linear(4, 128),
+        torch.nn.ReLU(),
+        torch.nn.Linear(128, 1),
+    )
+
+    model(torch.randn(2, 4)), model_td(torch.randn(2, 4))
+    ```
+  </Tab>
+  <Tab title="Pendulum (Continuous Actions)">
+    The actor outputs a **mean (μ) and standard deviation (σ)** of a Gaussian distribution. Actions are sampled from `Normal(μ, σ)`.
+
+    ```python
+    import torch
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc_statu = torch.nn.Sequential(
+                torch.nn.Linear(3, 128),
+                torch.nn.ReLU(),
+            )
+
+            self.fc_mu = torch.nn.Sequential(
+                torch.nn.Linear(128, 1),
+                torch.nn.Tanh(),
+            )
+
+            self.fc_std = torch.nn.Sequential(
+                torch.nn.Linear(128, 1),
+                torch.nn.Softplus(),
+            )
+
+        def forward(self, state):
+            state = self.fc_statu(state)
+            mu    = self.fc_mu(state) * 2.0    # scale to action range
+            std   = self.fc_std(state)
+            return mu, std
+
+
+    model    = Model()
+    model_td = torch.nn.Sequential(
+        torch.nn.Linear(3, 128),
+        torch.nn.ReLU(),
+        torch.nn.Linear(128, 1),
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Action Selection
+
+<Tabs>
+  <Tab title="CartPole">
+    ```python
+    import random
+
+    def get_action(state):
+        state = torch.FloatTensor(state).reshape(1, 4)
+        # [1, 4] → [1, 2]
+        prob = model(state)
+
+        # Sample one action according to its probability
+        action = random.choices(range(2), weights=prob[0].tolist(), k=1)[0]
+        return action
+    ```
+  </Tab>
+  <Tab title="Pendulum">
+    ```python
+    def get_action(state):
+        state = torch.FloatTensor(state).reshape(1, 3)
+        mu, std = model(state)
+
+        # Sample from Gaussian distribution
+        action = torch.distributions.Normal(mu, std).sample().item()
+        return action
+    ```
+  </Tab>
+</Tabs>
+
+## Advantage Computation (GAE)
+
+PPO uses **Generalised Advantage Estimation (GAE)** to compute a smoothed advantage signal. The formula accumulates TD errors backwards:
+
+```
+A_t = δ_t + (γλ) δ_{t+1} + (γλ)² δ_{t+2} + …
+```
+
+<Tabs>
+  <Tab title="CartPole">
+    ```python
+    def get_advantages(deltas):
+        advantages = []
+        s = 0.0
+
+        # Traverse backwards through TD errors
+        for delta in deltas[::-1]:
+            s = 0.98 * 0.95 * s + delta   # γ=0.98, λ=0.95
+            advantages.append(s)
+
+        advantages.reverse()
+        return advantages
+    ```
+  </Tab>
+  <Tab title="Pendulum">
+    ```python
+    def get_advantages(deltas):
+        advantages = []
+        s = 0.0
+
+        for delta in deltas[::-1]:
+            s = 0.9 * 0.9 * s + delta    # γ=0.9, λ=0.9
+            advantages.append(s)
+
+        advantages.reverse()
+        return advantages
+    ```
+  </Tab>
+</Tabs>
+
+## Training Loop
+
+The key PPO innovation is reusing the same batch of data for **multiple epochs** of gradient updates while keeping the policy ratio within the clipped range.
+
+<Tabs>
+  <Tab title="CartPole PPO">
+    ```python
+    def train():
+        optimizer    = torch.optim.Adam(model.parameters(),    lr=1e-3)
+        optimizer_td = torch.optim.Adam(model_td.parameters(), lr=1e-2)
+        loss_fn      = torch.nn.MSELoss()
+
+        for epoch in range(500):
+            states, rewards, actions, next_states, overs = get_data()
+
+            # ── Critic values and targets ────────────────────────────
+            # [b, 4] → [b, 1]
+            values  = model_td(states)
+
+            targets = model_td(next_states).detach()
+            targets = targets * 0.98
+            targets *= (1 - overs)
+            targets += rewards
+
+            # TD errors → GAE advantages
+            deltas     = (targets - values).squeeze(dim=1).tolist()
+            advantages = get_advantages(deltas)
+            advantages = torch.FloatTensor(advantages).reshape(-1, 1)
+
+            # Old policy probabilities (frozen snapshot)
+            old_probs = model(states)
+            old_probs = old_probs.gather(dim=1, index=actions)
+            old_probs = old_probs.detach()
+
+            # ── Multiple PPO epochs on the same batch ────────────────
+            for _ in range(10):
+                new_probs = model(states)
+                new_probs = new_probs.gather(dim=1, index=actions)
+
+                # Probability ratio π_new / π_old
+                ratio = new_probs / old_probs
+
+                # Clipped surrogate objective
+                surr1 = ratio * advantages
+                surr2 = torch.clamp(ratio, 0.8, 1.2) * advantages
+                loss  = -torch.min(surr1, surr2).mean()
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            # Critic update (one step per data collection)
+            loss_td = loss_fn(values, targets.detach())
+            optimizer_td.zero_grad()
+            loss_td.backward()
+            optimizer_td.step()
+
+            if epoch % 50 == 0:
+                print(epoch, sum([test(play=False) for _ in range(20)]) / 20)
+
+    train()
+    ```
+  </Tab>
+  <Tab title="Pendulum PPO">
+    For continuous actions, the probability ratio is computed from the Gaussian log-probabilities:
+
+    ```python
+    def train():
+        optimizer    = torch.optim.Adam(model.parameters(),    lr=1e-4)
+        optimizer_td = torch.optim.Adam(model_td.parameters(), lr=5e-3)
+        loss_fn      = torch.nn.MSELoss()
+
+        for epoch in range(3000):
+            states, rewards, actions, next_states, overs = get_data()
+
+            # Normalise rewards for Pendulum (range is [-16, 0])
+            rewards = (rewards + 8) / 8
+
+            # Critic
+            values  = model_td(states)
+            targets = model_td(next_states).detach()
+            targets = targets * 0.98
+            targets *= (1 - overs)
+            targets += rewards
+
+            deltas     = (targets - values).squeeze(dim=1).tolist()
+            advantages = get_advantages(deltas)
+            advantages = torch.FloatTensor(advantages).reshape(-1, 1)
+
+            # Snapshot the old log-probabilities
+            mu_old, std_old = model(states)
+            old_log_probs   = torch.distributions.Normal(mu_old, std_old).log_prob(actions)
+            old_log_probs   = old_log_probs.detach()
+
+            for _ in range(10):
+                mu_new, std_new = model(states)
+                new_log_probs   = torch.distributions.Normal(mu_new, std_new).log_prob(actions)
+
+                # Ratio in log-space for numerical stability
+                ratio = (new_log_probs - old_log_probs).exp()
+
+                surr1 = ratio * advantages
+                surr2 = torch.clamp(ratio, 0.8, 1.2) * advantages
+                loss  = -torch.min(surr1, surr2).mean()
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            loss_td = loss_fn(values, targets.detach())
+            optimizer_td.zero_grad()
+            loss_td.backward()
+            optimizer_td.step()
+
+            if epoch % 200 == 0:
+                print(epoch, sum([test(play=False) for _ in range(5)]) / 5)
+
+    train()
+    ```
+  </Tab>
+</Tabs>
+
+## Why Clipping Works
+
+```
+L_CLIP = E [ min( ratio · A,  clip(ratio, 1-ε, 1+ε) · A ) ]
+```
+
+- When **A > 0** (action was good): ratio is clipped at `1+ε`, preventing the policy from increasing that action's probability too aggressively.
+- When **A < 0** (action was bad): ratio is clipped at `1-ε`, preventing the policy from suppressing the bad action probability too quickly.
+
+The `min` ensures the pessimistic (clipped) bound is always taken, so the objective only improves when the policy doesn't deviate too far.
+
+<Warning>
+The clip range `[0.8, 1.2]` corresponds to ε=0.2. Increasing ε gives bigger updates per step but increases instability. Typical values range from 0.1 to 0.3.
+</Warning>
+
+<Tip>
+PPO reuses each data batch for multiple gradient steps (`range(10)`). This improves sample efficiency compared to REINFORCE, which discards each episode immediately after one gradient step.
+</Tip>

@@ -1,0 +1,210 @@
+---
+title: "REINFORCE: Policy Gradient for Discrete Actions"
+sidebarTitle: "Policy Gradient"
+description: "Implement the REINFORCE algorithm — a Monte Carlo policy gradient method — to train a neural network policy directly on CartPole using PyTorch."
+---
+
+Value-based methods such as DQN learn a Q-function and derive a policy implicitly by acting greedily with respect to it. **Policy gradient methods** take a more direct approach: they parameterise the policy itself as a neural network and optimise it by following the gradient of the expected return. The REINFORCE algorithm is the simplest member of this family. It collects a complete episode using the current policy, computes the discounted return at each time step, and then updates the network parameters so that actions that led to high returns become more probable.
+
+## Algorithm Overview
+
+<Steps>
+  <Step title="Collect an episode">
+    Run the current policy π(a|s;θ) until the episode ends. Record states, actions, and rewards for every step.
+  </Step>
+  <Step title="Compute discounted returns">
+    Work backwards from the final step: `G_t = r_t + γ·G_{t+1}`. Accumulate from the end so only one backward pass through the rewards is needed.
+  </Step>
+  <Step title="Compute policy gradient loss">
+    For each step, loss = `-log π(a_t|s_t) · G_t`. The negative sign converts the gradient ascent objective into a gradient descent loss.
+  </Step>
+  <Step title="Backpropagate and update">
+    Accumulate gradients over the full episode using `retain_graph=True`, then call the optimizer once.
+  </Step>
+</Steps>
+
+## Environment
+
+```python
+import gym
+
+class MyWrapper(gym.Wrapper):
+
+    def __init__(self):
+        env = gym.make('CartPole-v1', render_mode='rgb_array')
+        super().__init__(env)
+        self.env = env
+        self.step_n = 0
+
+    def reset(self):
+        state, _ = self.env.reset()
+        self.step_n = 0
+        return state
+
+    def step(self, action):
+        state, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
+        self.step_n += 1
+        if self.step_n >= 200:
+            done = True
+        return state, reward, done, info
+
+
+env = MyWrapper()
+env.reset()
+```
+
+## Policy Network
+
+REINFORCE requires a **stochastic policy** that outputs a probability distribution over actions. Adding a `Softmax` layer at the output ensures the network produces valid probabilities.
+
+```python
+import torch
+
+# Policy network: state (4) → action probabilities (2)
+model = torch.nn.Sequential(
+    torch.nn.Linear(4, 128),
+    torch.nn.ReLU(),
+    torch.nn.Linear(128, 2),
+    torch.nn.Softmax(dim=1),
+)
+
+# Verify output: two probabilities summing to 1
+model(torch.randn(2, 4))
+```
+
+## Action Selection
+
+Unlike epsilon-greedy, the policy is sampled stochastically from the probability distribution output by the network.
+
+```python
+import random
+
+def get_action(state):
+    state = torch.FloatTensor(state).reshape(1, 4)
+
+    # [1, 4] → [1, 2]
+    prob = model(state)
+
+    # Sample one action according to its probability
+    action = random.choices(range(2), weights=prob[0].tolist(), k=1)[0]
+
+    return action
+
+
+get_action([1, 2, 3, 4])
+```
+
+## Data Collection
+
+REINFORCE collects a **complete episode** before updating — it is a Monte Carlo method.
+
+```python
+def get_data():
+    states      = []
+    rewards     = []
+    actions     = []
+
+    state = env.reset()
+    over  = False
+
+    while not over:
+        action = get_action(state)
+        next_state, reward, over, _ = env.step(action)
+
+        states.append(state)
+        rewards.append(reward)
+        actions.append(action)
+
+        state = next_state
+
+    return states, rewards, actions
+```
+
+## Training Loop
+
+The return `G_t` is computed online inside the training loop by iterating backwards through the episode. The gradient is accumulated for every step before a single optimizer update.
+
+```python
+def train():
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    for epoch in range(1000):
+        states, rewards, actions = get_data()
+
+        optimizer.zero_grad()
+
+        # Discounted return, initialised at 0 and built backwards
+        reward_sum = 0
+
+        for i in reversed(range(len(states))):
+            # G_t = r_t + γ · G_{t+1}
+            reward_sum *= 0.98
+            reward_sum += rewards[i]
+
+            # Re-evaluate log π(a_t|s_t) under the current policy
+            state = torch.FloatTensor(states[i]).reshape(1, 4)
+
+            # [1, 4] → [1, 2]
+            prob = model(state)
+
+            # Scalar probability of the chosen action
+            prob = prob[0, actions[i]]
+
+            # Policy gradient loss: -log π(a|s) * G_t
+            loss = -prob.log() * reward_sum
+
+            # Accumulate gradients (retain_graph because we loop over them)
+            loss.backward(retain_graph=True)
+
+        optimizer.step()
+
+        if epoch % 50 == 0:
+            print(epoch, sum([test(play=False) for _ in range(20)]) / 20)
+
+train()
+```
+
+<Note>
+`retain_graph=True` is needed because the same computational graph is reused for every time step in the episode. Without it PyTorch would free the graph after the first `backward()` call and the subsequent ones would fail.
+</Note>
+
+## Key Equations
+
+The REINFORCE gradient estimator is:
+
+```
+∇_θ J(θ) = E [ Σ_t ∇_θ log π(a_t|s_t; θ) · G_t ]
+```
+
+where `G_t = Σ_{k=t}^{T} γ^{k-t} r_k` is the discounted return from step *t*.
+
+In code this maps to:
+
+```python
+loss = -prob.log() * reward_sum
+loss.backward(retain_graph=True)
+```
+
+<Tip>
+The high variance of REINFORCE is its main weakness. Actor-Critic methods (see the next page) replace `G_t` with an **advantage estimate** `A_t = G_t - V(s_t)` to reduce variance at the cost of introducing a learned baseline.
+</Tip>
+
+## Comparison with DQN
+
+<Tabs>
+  <Tab title="Policy Gradient (REINFORCE)">
+    - **On-policy**: uses data collected by the current policy only.
+    - **Stochastic policy**: outputs a probability distribution; action is sampled.
+    - **Monte Carlo returns**: requires a full episode before any update.
+    - **Directly optimises** the policy objective.
+    - **High variance** due to Monte Carlo estimation of the return.
+  </Tab>
+  <Tab title="DQN">
+    - **Off-policy**: can reuse old transitions from the replay buffer.
+    - **Deterministic at test time**: acts greedily with respect to Q.
+    - **Bootstrapped updates**: can update after every step using TD targets.
+    - **Indirectly derives** the policy from the Q-function.
+    - **Lower variance** but prone to Q-value overestimation.
+  </Tab>
+</Tabs>
